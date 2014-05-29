@@ -1016,7 +1016,7 @@ class FastExportFilter(object):
       checkpoint.dump(self._output)
 
   #############################################################################
-  def run(self, *args):
+  def run(self, *args, **kwargs):
   #############################################################################
     """
     This method performs the filter. The method optionally takes two arguments.
@@ -1062,7 +1062,9 @@ class FastExportFilter(object):
     global _CURRENT_STREAM_NUMBER
 
     _CURRENT_STREAM_NUMBER += 1
-    if _CURRENT_STREAM_NUMBER > 1:
+    if kwargs.get("id_offset", None) is not None:
+      self._id_offset = kwargs["id_offset"]
+    elif _CURRENT_STREAM_NUMBER > 1:
       self._id_offset = _IDS._next_id-1
 
     # Run over the input and do the filtering
