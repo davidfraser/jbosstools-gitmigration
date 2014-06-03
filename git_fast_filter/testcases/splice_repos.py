@@ -1,14 +1,17 @@
 #!/usr/bin/env python
 
 import os
-import re
+import shutil
 import sys
 import logging
 import tempfile
+from os.path import abspath, basename, dirname, join
 
 from git_fast_filter import Reset, Commit, FastExportFilter, record_id_rename
 from git_fast_filter import fast_export_output, fast_import_input
 from git_fast_filter import _IDS
+
+KEEP_ON_ERROR = True
 
 class InterleaveRepositories:
   def __init__(self, repo1, repo2, output_dir):
@@ -101,6 +104,9 @@ class InterleaveRepositories:
     input2 = fast_export_output(self.repo2)
     store1_fd, store1_filename = tempfile.mkstemp(suffix=".git-fast-export")
     store2_fd, store2_filename = tempfile.mkstemp(suffix=".git-fast-export")
+    failure_base_dir = dirname(abspath(self.output_dir))
+    store1_failure_filename = join(failure_base_dir, "%s-%s" % (basename(self.repo1), basename(store1_filename)))
+    store2_failure_filename = join(failure_base_dir, "%s-%s" % (basename(self.repo2), basename(store2_filename)))
     store1, store2 = os.fdopen(store1_fd, 'wb'), os.fdopen(store2_fd, 'wb')
     try:
         try:
@@ -125,6 +131,7 @@ class InterleaveRepositories:
     # Reset the _next_id so that it's like we're starting afresh
     _IDS._next_id = 1
     store1, store2 = open(store1_filename, 'rb'), open(store2_filename, 'rb')
+    success = False
     try:
         self.target = fast_import_input(self.output_dir)
         # import collections
@@ -144,18 +151,29 @@ class InterleaveRepositories:
         # happens is git-fast-import completes after this python script does)
         self.target.stdin.close()
         self.target.wait()
+        success = True
+    except Exception, e:
+        logging.error("Error weaving commits into new repository: %s", e)
     finally:
         store1.close()
         store2.close()
-        try:
-            os.remove(store1_filename)
-        except Exception, e:
-            logging.warning("Error removing temporary file %s", store1_filename)
-        try:
-            os.remove(store2_filename)
-        except Exception, e:
-            logging.warning("Error removing temporary file %s", store2_filename)
+        if success or not KEEP_ON_ERROR:
+            try:
+                os.remove(store1_filename)
+            except Exception, e:
+                logging.warning("Error removing temporary file %s", store1_filename)
+            try:
+                os.remove(store2_filename)
+            except Exception, e:
+                logging.warning("Error removing temporary file %s", store2_filename)
+        elif KEEP_ON_ERROR:
+            logging.warning("Storing export for %s in %s", self.repo1, store1_failure_filename)
+            shutil.move(store1_filename, store1_failure_filename)
+            logging.warning("Storing export for %s in %s", self.repo2, store2_failure_filename)
+            shutil.move(store2_filename, store2_failure_filename)
 
-splicer = InterleaveRepositories(sys.argv[1], sys.argv[2], sys.argv[3])
-splicer.run()
+
+if __name__ == '__main__':
+    splicer = InterleaveRepositories(sys.argv[1], sys.argv[2], sys.argv[3])
+    splicer.run()
 
