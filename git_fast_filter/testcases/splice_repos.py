@@ -56,6 +56,7 @@ class InterleaveRepositories:
         self.changed_parents = {}
         self.last_commit = None
         self.memory_check = {}
+        self.written_commits = set()
         self.pending_commits = {}
 
     def skip_reset(self, reset):
@@ -92,13 +93,19 @@ class InterleaveRepositories:
             # print "relabeling parent %s -> %s:%s" % (commit.from_commit, prev_repo, prev_commit_id)
             commit.from_commit = prev_commit_id
         commit.dump(self.target.stdin if hasattr(self.target, "stdin") else self.target)
+        self.written_commits.add(commit.old_id)
 
     def get_available_commits(self):
         available_commits = []
         for branch, commit_map in self.pending_commits.items():
             combined_commits = self.combined_branches.get(branch, [])
             if combined_commits and combined_commits[0] in commit_map:
-                repo, commit_id = combined_commits.pop(0)
+                repo, commit_id = combined_commits[0]
+                depends_on = commit_map[repo, commit_id].from_commit
+                if depends_on and depends_on not in self.written_commits:
+                    continue
+                else:
+                    combined_commits.pop(0)
                 commit = commit_map.pop((repo, commit_id))
                 available_commits.append((branch, repo, commit_id, commit))
                 if not commit_map:
