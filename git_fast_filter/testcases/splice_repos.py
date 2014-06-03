@@ -13,7 +13,6 @@ from git_fast_filter import _IDS
 
 KEEP_ON_ERROR = True
 
-
 class InterleaveRepositories:
     def __init__(self, repo1, repo2, output_dir):
         self.repo1 = repo1
@@ -61,7 +60,7 @@ class InterleaveRepositories:
         if prev_commit_id is not None:
             # print "relabeling parent %s -> %s:%s" % (commit.from_commit, prev_repo, prev_commit_id)
             commit.from_commit = prev_commit_id
-        commit.dump(self.target.stdin)
+        commit.dump(self.target.stdin if hasattr(self.target, "stdin") else self.target)
 
     def get_available_commits(self):
         available_commits = []
@@ -110,55 +109,63 @@ class InterleaveRepositories:
         store1_failure_filename = join(failure_base_dir, "%s-%s" % (basename(self.repo1), basename(store1_filename)))
         store2_failure_filename = join(failure_base_dir, "%s-%s" % (basename(self.repo2), basename(store2_filename)))
         store1, store2 = os.fdopen(store1_fd, 'wb'), os.fdopen(store2_fd, 'wb')
+        success = False
         try:
-            try:
-                collect1 = FastExportFilter(commit_callback=lambda c: self.remember_commits(1, c))
-                collect1.run(input1.stdout, store1)
-                collect2 = FastExportFilter(commit_callback=lambda c: self.remember_commits(2, c))
-                collect2.run(input2.stdout, store2)
-            finally:
-                store1.close()
-                store2.close()
+            collect1 = FastExportFilter(commit_callback=lambda c: self.remember_commits(1, c))
+            collect1.run(input1.stdout, store1)
+            collect2 = FastExportFilter(commit_callback=lambda c: self.remember_commits(2, c))
+            collect2.run(input2.stdout, store2)
+            success = True
         except Exception, e:
-            try:
-                os.remove(store1_filename)
-            except Exception, e:
-                logging.warning("Error removing temporary file %s", store1_filename)
-            try:
-                os.remove(store2_filename)
-            except Exception, e:
-                logging.warning("Error removing temporary file %s", store2_filename)
+            logging.error("Error in memorizing export: %s", e)
+            raise
+        finally:
+            store1.close()
+            store2.close()
+            if not success:
+                if not KEEP_ON_ERROR:
+                    try:
+                        os.remove(store1_filename)
+                    except Exception, e:
+                        logging.warning("Error removing temporary file %s", store1_filename)
+                    try:
+                        os.remove(store2_filename)
+                    except Exception, e:
+                        logging.warning("Error removing temporary file %s", store2_filename)
+                else:
+                    logging.warning("Storing in-progress export for %s in %s", self.repo1, store1_failure_filename)
+                    shutil.move(store1_filename, store1_failure_filename)
+                    logging.warning("Storing in-progress export for %s in %s", self.repo2, store2_failure_filename)
+                    shutil.move(store2_filename, store2_failure_filename)
+
         self.merge_branches()
 
         # Reset the _next_id so that it's like we're starting afresh
         _IDS._next_id = 1
         store1, store2 = open(store1_filename, 'rb'), open(store2_filename, 'rb')
         success = False
+        weave_store_fd, weave_store_filename = tempfile.mkstemp(suffix="-weave.git-fast-export")
+        self.target = weave_store = os.fdopen(weave_store_fd, 'wb')
+        weave_store_failure_filename = join(failure_base_dir, "%s-%s" % (basename(self.output_dir), basename(weave_store_filename)))
         try:
-            self.target = fast_import_input(self.output_dir)
-            # import collections
-            # self.target = collections.namedtuple('dummy', 'stdin')(open("/tmp/x", "wb")) # (tempfile.TemporaryFile())
             filter1 = FastExportFilter(reset_callback=lambda r: self.skip_reset(r),
                                        commit_callback=lambda c: self.weave_commit(1, c))
             self.production_in_progress = {1: True, 2: True}
-            self.run_weave(1, filter1, store1, self.target.stdin, id_offset=0)
+            self.run_weave(1, filter1, store1, weave_store, id_offset=0)
 
             filter2 = FastExportFilter(reset_callback=lambda r: self.skip_reset(r),
                                        commit_callback=lambda c: self.weave_commit(2, c))
-            self.run_weave(2, filter2, store2, self.target.stdin, id_offset=0)
+            self.run_weave(2, filter2, store2, weave_store, id_offset=0)
 
             self.write_commits()
-            # Wait for git-fast-import to complete (only necessary since we passed
-            # file objects to FastExportFilter.run; and even then the worst that
-            # happens is git-fast-import completes after this python script does)
-            self.target.stdin.close()
-            self.target.wait()
             success = True
         except Exception, e:
             logging.error("Error weaving commits into new repository: %s", e)
+            raise
         finally:
             store1.close()
             store2.close()
+            weave_store.close()
             if success or not KEEP_ON_ERROR:
                 try:
                     os.remove(store1_filename)
@@ -173,7 +180,29 @@ class InterleaveRepositories:
                 shutil.move(store1_filename, store1_failure_filename)
                 logging.warning("Storing export for %s in %s", self.repo2, store2_failure_filename)
                 shutil.move(store2_filename, store2_failure_filename)
+                logging.warning("Storing in-progress weaved export in %s", weave_store_failure_filename)
+                shutil.move(weave_store_filename, weave_store_failure_filename)
 
+        success = False
+        weave_store = open(weave_store_filename, 'rb')
+        try:
+            self.target = fast_import_input(self.output_dir)
+            self.target.stdin.writelines(weave_store.readlines())
+            # Wait for git-fast-import to complete (only necessary since we passed
+            # file objects to FastExportFilter.run; and even then the worst that
+            # happens is git-fast-import completes after this python script does)
+            self.target.stdin.close()
+            self.target.wait()
+            success = True
+        finally:
+            if success or not KEEP_ON_ERROR:
+                try:
+                    os.remove(weave_store_filename)
+                except Exception, e:
+                    logging.warning("Error removing temporary file %s", store2_filename)
+            elif KEEP_ON_ERROR:
+                logging.warning("Storing weaved export in %s", weave_store_failure_filename)
+                shutil.move(weave_store_filename, weave_store_failure_filename)
 
 if __name__ == '__main__':
     splicer = InterleaveRepositories(sys.argv[1], sys.argv[2], sys.argv[3])
