@@ -11,6 +11,9 @@ from git_fast_filter import Reset, Commit, FastExportFilter, record_id_rename
 from git_fast_filter import fast_export_output, fast_import_input
 from git_fast_filter import _IDS
 
+# TODO: allow incremental update
+
+# TODO: make this a command-line option
 KEEP_ON_ERROR = True
 
 class TemporaryOutput(object):
@@ -196,12 +199,10 @@ class InterleaveRepositories:
         success = False
         weave_store.open_for_read()
         try:
-            self.target = fast_import_input(self.output_dir)
-            self.target.stdin.writelines(weave_store.file.readlines())
+            self.target = fast_import_input(self.output_dir, import_input=weave_store.file)
             # Wait for git-fast-import to complete (only necessary since we passed
             # file objects to FastExportFilter.run; and even then the worst that
             # happens is git-fast-import completes after this python script does)
-            self.target.stdin.close()
             self.target.wait()
             success = True
         finally:

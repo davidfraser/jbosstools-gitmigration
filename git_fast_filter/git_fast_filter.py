@@ -1118,7 +1118,7 @@ def fast_export_output(source_repo, extra_args = None):
                cwd = source_repo)
 
 ###############################################################################
-def fast_import_input(target_repo, extra_args = None):
+def fast_import_input(target_repo, extra_args = None, import_input = None):
 ###############################################################################
   """
   Given a target-repo location, setup a Popen process that runs fast-import
@@ -1136,7 +1136,7 @@ def fast_import_input(target_repo, extra_args = None):
 
   # Create and return the git process
   return Popen(["git", "fast-import", "--quiet"] + extra_args,
-               stdin = PIPE,
+               stdin = import_input or PIPE,
                cwd = target_repo)
 
 ###############################################################################
