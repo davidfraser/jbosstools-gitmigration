@@ -54,6 +54,8 @@ class InterleaveRepositories:
 
         # commit_branches maps branch -> repo -> ordered list of (commit_date, repo, commit_id)
         self.commit_branches = {}
+        # just remember the commit dates for everything
+        self.commit_dates = {}
         # commit_parents maps (repo, commit_id) -> (repo, parent_id)
         self.commit_parents = {}
         # combined_branches maps branch -> ordered list of (repo, commit_id)
@@ -72,13 +74,18 @@ class InterleaveRepositories:
         self.commit_branches.setdefault(commit.branch, {}).setdefault(repo, []).append(
             (commit.committer_date, repo, commit.id))
         self.commit_parents[repo, commit.id] = (repo, commit.from_commit)
+        self.commit_dates[repo, commit.id] = commit.committer_date
 
     def merge_branches(self):
         """for each branch, calculate how combining repos should change parents of commits"""
+        branch_parents = {}
         for branch, repo_maps in self.commit_branches.items():
             self.combined_branches[branch] = combined_commits = []
             branch_maps = [repo_maps[repo] for repo in sorted(repo_maps)]
             last_repo, last_commit_id = None, None
+            head_commits = [branch_map[0] for branch_map in branch_maps]
+            np = (None, None)
+            branch_parents[branch] = [self.commit_parents.get((repo, commit_id), np) for _, repo, commit_id in head_commits]
             while branch_maps:
                 last_commits = [branch_map[-1] for branch_map in branch_maps]
                 committer_date, repo, commit_id = max(last_commits)
@@ -92,6 +99,19 @@ class InterleaveRepositories:
                     repo_maps.pop(repo)
                     branch_maps = [repo_maps[repo] for repo in sorted(repo_maps)]
             combined_commits.reverse()
+        for branch, parent_commits in branch_parents.items():
+            tail_repo, tail_commit_id = self.combined_branches[branch][0]
+            parent_commits = [(self.commit_dates[repo, commit_id], repo, commit_id)
+                              for repo, commit_id in parent_commits if commit_id is not None]
+            parent_commits.sort()
+            if not parent_commits:
+                logging.info("Branch %s has no parents", branch)
+                continue
+            # TODO: Check that these parents all splice together nicely anyway
+            _, branch_parent_repo, branch_parent_id = parent_commits[-1]
+            logging.info("Found parent for branch %s tail %s:%s - %s:%s",
+                         branch, tail_repo, tail_commit_id, branch_parent_repo, branch_parent_id)
+            self.changed_parents[tail_repo, tail_commit_id] = branch_parent_repo, branch_parent_id
 
     def weave_commit(self, repo, commit):
         # print "weave", repo, commit.id, commit.old_id, commit.message
@@ -101,7 +121,8 @@ class InterleaveRepositories:
     def write_commit(self, repo, commit):
         prev_repo, prev_commit_id = self.changed_parents.get((repo, commit.old_id), (None, None))
         if prev_commit_id is not None:
-            logging.info("relabeling parent %s:%s -> %s:%s", repo, commit.from_commit, prev_repo, prev_commit_id)
+            logging.info("relabeling %s:%s parent from %s:%s -> %s:%s",
+                         repo, commit.old_id, repo, commit.from_commit, prev_repo, prev_commit_id)
             commit.from_commit = prev_commit_id
         commit.dump(self.target.stdin if hasattr(self.target, "stdin") else self.target)
         self.written_commits.add(commit.old_id)
@@ -113,7 +134,10 @@ class InterleaveRepositories:
             combined_commits = self.combined_branches.get(branch, [])
             if combined_commits and combined_commits[0] in commit_map:
                 repo, commit_id = combined_commits[0]
-                depends_on = commit_map[repo, commit_id].from_commit
+                if (repo, commit_id) in self.changed_parents:
+                    depends_on = self.changed_parents[repo, commit_id][1]
+                else:
+                    depends_on = commit_map[repo, commit_id].from_commit
                 if depends_on and depends_on not in self.written_commits:
                     continue
                 else:
