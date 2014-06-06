@@ -80,17 +80,18 @@ class InterleaveRepositories:
             branch_maps = [repo_maps[repo] for repo in sorted(repo_maps)]
             last_repo, last_commit_id = None, None
             while branch_maps:
-                next_commits = [branch_map[0] for branch_map in branch_maps]
-                committer_date, repo, commit_id = min(next_commits)
+                last_commits = [branch_map[-1] for branch_map in branch_maps]
+                committer_date, repo, commit_id = max(last_commits)
                 branch_map = repo_maps[repo]
-                branch_map.pop(0)
+                branch_map.pop(-1)
                 combined_commits.append((repo, commit_id))
-                if last_commit_id is not None and self.commit_parents[repo, commit_id] != (last_repo, last_commit_id):
-                    self.changed_parents[repo, commit_id] = last_repo, last_commit_id
+                if last_commit_id is not None and self.commit_parents[last_repo, last_commit_id] != (repo, commit_id):
+                    self.changed_parents[last_repo, last_commit_id] = repo, commit_id
                 last_repo, last_commit_id = repo, commit_id
                 if not branch_map:
                     repo_maps.pop(repo)
                     branch_maps = [repo_maps[repo] for repo in sorted(repo_maps)]
+            combined_commits.reverse()
 
     def weave_commit(self, repo, commit):
         # print "weave", repo, commit.id, commit.old_id, commit.message
