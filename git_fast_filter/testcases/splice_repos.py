@@ -12,7 +12,6 @@ from git_fast_filter import fast_export_output, fast_import_input
 from git_fast_filter import _IDS
 
 # TODO: allow incremental update
-
 # TODO: make this a command-line option
 KEEP_ON_ERROR = True
 
@@ -53,25 +52,29 @@ class InterleaveRepositories:
         self.repo2 = repo2
         self.output_dir = output_dir
 
+        # commit_branches maps branch -> repo -> ordered list of (commit_date, repo, commit_id)
         self.commit_branches = {}
+        # commit_parents maps (repo, commit_id) -> (repo, parent_id)
         self.commit_parents = {}
+        # combined_branches maps branch -> ordered list of (repo, commit_id)
         self.combined_branches = {}
+        # changed_parents maps (repo, commit_id) -> (new_parent_repo, new_parent_id)
         self.changed_parents = {}
-        self.last_commit = None
-        self.memory_check = {}
+        # keeps track of which commit_ids have been written, so we don't write something before its dependencies
         self.written_commits = set()
+        # maps branch -> (repo, commit_id) -> commit_object for those commits that have yet to be written
         self.pending_commits = {}
 
     def skip_reset(self, reset):
         reset.skip()
 
     def remember_commits(self, repo, commit):
-        # print "remember", repo, commit.id, commit.old_id, commit.message
         self.commit_branches.setdefault(commit.branch, {}).setdefault(repo, []).append(
             (commit.committer_date, repo, commit.id))
         self.commit_parents[repo, commit.id] = (repo, commit.from_commit)
 
     def merge_branches(self):
+        """for each branch, calculate how combining repos should change parents of commits"""
         for branch, repo_maps in self.commit_branches.items():
             self.combined_branches[branch] = combined_commits = []
             branch_maps = [repo_maps[repo] for repo in sorted(repo_maps)]
@@ -89,11 +92,15 @@ class InterleaveRepositories:
                     repo_maps.pop(repo)
                     branch_maps = [repo_maps[repo] for repo in sorted(repo_maps)]
 
+    def weave_commit(self, repo, commit):
+        # print "weave", repo, commit.id, commit.old_id, commit.message
+        self.pending_commits.setdefault(commit.branch, {})[repo, commit.old_id] = commit
+        commit.skip(new_id=commit.id)
+
     def write_commit(self, repo, commit):
-        # print "write", repo, commit.old_id
         prev_repo, prev_commit_id = self.changed_parents.get((repo, commit.old_id), (None, None))
         if prev_commit_id is not None:
-            # print "relabeling parent %s -> %s:%s" % (commit.from_commit, prev_repo, prev_commit_id)
+            logging.info("relabeling parent %s:%s -> %s:%s", repo, commit.from_commit, prev_repo, prev_commit_id)
             commit.from_commit = prev_commit_id
         commit.dump(self.target.stdin if hasattr(self.target, "stdin") else self.target)
         self.written_commits.add(commit.old_id)
@@ -101,6 +108,7 @@ class InterleaveRepositories:
     def get_available_commits(self):
         available_commits = []
         for branch, commit_map in self.pending_commits.items():
+            # for each branch, look to see if the next commit we need is available
             combined_commits = self.combined_branches.get(branch, [])
             if combined_commits and combined_commits[0] in commit_map:
                 repo, commit_id = combined_commits[0]
@@ -129,16 +137,11 @@ class InterleaveRepositories:
                     self.write_commit(repo, commit)
                     # print "production_in_progress", self.production_in_progress
 
-    def weave_commit(self, repo, commit):
-        # print "weave", repo, commit.id, commit.old_id, commit.message
-        self.pending_commits.setdefault(commit.branch, {})[repo, commit.old_id] = commit
-        commit.skip(new_id=commit.id)
-
     def run_weave(self, repo, export_filter, source, target, id_offset=None):
         try:
             export_filter.run(source, target, id_offset=id_offset)
         finally:
-            print "finished repo", repo
+            logging.info("finished repo %s", repo)
             self.production_in_progress.pop(repo)
 
     def run(self):
@@ -217,6 +220,7 @@ class InterleaveRepositories:
                 weave_store.handle_failure(failure_base_dir, in_progress=False)
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
     splicer = InterleaveRepositories(sys.argv[1], sys.argv[2], sys.argv[3])
     splicer.run()
 
