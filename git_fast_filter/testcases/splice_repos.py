@@ -1,36 +1,70 @@
 #!/usr/bin/env python
 
 import argparse
+import datetime
+import json
 import os
 import shutil
 import sys
 import logging
 import tempfile
-from os.path import abspath, basename, dirname, join
+from os.path import abspath, basename, dirname, exists, join
 
 from git_fast_filter import Reset, Commit, FastExportFilter, record_id_rename
 from git_fast_filter import fast_export_output, fast_import_input
 from git_fast_filter import _IDS
+from git_fast_filter import FixedTimeZone
 
 # TODO: allow incremental update
 # TODO: make this a command-line option
 KEEP_ON_ERROR = True
 
-class TemporaryOutput(object):
-    def __init__(self, label, suffix, description, dir=None):
+def datetime_to_json(d):
+    z = None if (d.tzinfo is None) else d.tzinfo.tzname(d)
+    return [d.year, d.month, d.day, d.hour, d.minute, d.second, d.microsecond, z]
+
+def json_to_datetime(d):
+    year, month, day, hour, minute, second, microsecond, z = d
+    tzinfo = None if z is None else FixedTimeZone(z)
+    return datetime.datetime(year, month, day, hour, minute, second, microsecond, tzinfo)
+
+class IntermediateFile(object):
+    """Helpful wrapper object for intermediate files.
+    Can handle random file names or fixed ones, in which case a previously created file will be reused
+    Handles reopening the files for reading later, and tracking if the file is still in progress being created
+    Handles failure and remembers whether the file has been closed"""
+    def __init__(self, label, suffix, description, dir=None, fixed_name=None):
         self.label = label
         self.description = description
-        self.fd, self.filename = tempfile.mkstemp(prefix="%s-" % label, suffix=suffix, dir=dir)
-        self.file = os.fdopen(self.fd, 'wb')
+        self.exists = False
+        self.in_progress = True
+        self.closed = False
+        if fixed_name:
+            self.filename = os.path.join(dir or tempfile.gettempdir(), "%s-%s%s" % (label, fixed_name, suffix))
+            if exists(self.filename) and os.stat(self.filename).st_size > 0:
+                self.file = open(self.filename, 'rb')
+                self.exists = True
+                self.in_progress = False
+            else:
+                self.file = open(self.filename, 'wb')
+        else:
+            fd, self.filename = tempfile.mkstemp(prefix="%s-" % label, suffix=suffix, dir=dir)
+            self.file = os.fdopen(fd, 'wb')
 
-    def close(self):
+    def close(self, success=True):
         self.file.close()
+        self.closed = True
+        if success:
+            self.in_progress = False
 
     def open_for_read(self):
         self.file = open(self.filename, "rb")
+        self.closed = False
 
-    def handle_failure(self, target_directory, in_progress=True):
-        status = "in-progress " if in_progress else ""
+    def handle_failure(self, target_directory):
+        status = "in-progress " if self.in_progress else ""
+        if not self.closed:
+            self.close(False)
         if not KEEP_ON_ERROR:
             try:
                 os.remove(self.filename)
@@ -43,6 +77,8 @@ class TemporaryOutput(object):
                 shutil.move(self.filename, filename)
 
     def remove_file(self):
+        if not self.closed:
+            self.close(True)
         try:
             os.remove(self.filename)
         except Exception, e:
@@ -54,6 +90,8 @@ class InterleaveRepositories:
         self.output_dir = args.output_repo
         self.failure_base_dir = dirname(abspath(self.output_dir))
         self.tmpdir = abspath(args.tmpdir)
+        self.tmplabel = args.tmplabel
+        self.intermediate_files = []
 
         # commit_branches maps branch -> repo -> ordered list of (commit_date, repo, commit_id)
         self.commit_branches = {}
@@ -70,17 +108,52 @@ class InterleaveRepositories:
         # maps branch -> (repo, commit_id) -> commit_object for those commits that have yet to be written
         self.pending_commits = {}
 
-    def tmp_export_file(self, label, suffix, description):
-        return TemporaryOutput(label, suffix, description, dir=self.tmpdir)
+    def open_export_file(self, label, suffix, description):
+        file_wrapper = IntermediateFile(label, suffix, description, dir=self.tmpdir, fixed_name=self.tmplabel)
+        self.intermediate_files.append(file_wrapper)
+        return file_wrapper
 
     def skip_reset(self, reset):
         reset.skip()
 
-    def remember_commits(self, repo, commit):
-        self.commit_branches.setdefault(commit.branch, {}).setdefault(repo, []).append(
-            (commit.committer_date, repo, commit.id))
-        self.commit_parents[repo, commit.id] = (repo, commit.from_commit)
-        self.commit_dates[repo, commit.id] = commit.committer_date
+    @staticmethod
+    def jsonize_commit(repo, commit):
+        return (repo, commit.id, commit.branch, datetime_to_json(commit.committer_date), commit.from_commit)
+
+    def remember_commits(self, stored_commits):
+        for repo, commit_id, commit_branch, committer_date_parts, from_commit in stored_commits:
+            committer_date = json_to_datetime(committer_date_parts)
+            self.commit_branches.setdefault(commit_branch, {}).setdefault(repo, []).append(
+                (committer_date, repo, commit_id))
+            self.commit_parents[repo, commit_id] = (repo, from_commit)
+            self.commit_dates[repo, commit_id] = committer_date
+
+
+    def collect_commits(self):
+        self.exported_stores = []
+        for n, input_repo in enumerate(self.input_repos, start=1):
+            exported_store = self.open_export_file(basename(input_repo), ".git-fast-export", "export")
+            self.exported_stores.append(exported_store)
+            remember_commits_file = self.open_export_file(basename(input_repo), ".remember-commits.json", "commit info")
+            if exported_store.exists:
+                if not remember_commits_file.exists:
+                    raise ValueError("Cannot reuse previous export %s as %s has been lost",
+                                     exported_store.filename, remember_commits_file.filename)
+                stored_commits = json.load(remember_commits_file.file)
+                remember_commits_file.close()
+            else:
+                stored_commits = []
+                export = fast_export_output(input_repo)
+                try:
+                    collect = FastExportFilter(commit_callback=lambda c: stored_commits.append(self.jsonize_commit(n, c)))
+                    collect.run(export.stdout, exported_store.file)
+                    exported_store.close()
+                    json.dump(stored_commits, remember_commits_file.file, indent=4)
+                    remember_commits_file.close()
+                except Exception, e:
+                    logging.error("Error in memorizing export for %s [%d]: %s", input_repo, n, e)
+                    raise
+            self.remember_commits(stored_commits)
 
     def merge_branches(self):
         """for each branch, calculate how combining repos should change parents of commits"""
@@ -178,27 +251,8 @@ class InterleaveRepositories:
             logging.info("finished repo %s", repo)
             self.production_in_progress.pop(repo)
 
-    def collect_commits(self):
-        self.exported_stores = []
-        for n, input_repo in enumerate(self.input_repos, start=1):
-            export = fast_export_output(input_repo)
-            exported_store = self.tmp_export_file(basename(input_repo), ".git-fast-export", "export")
-            self.in_progress_stores.append(exported_store)
-            self.exported_stores.append(exported_store)
-            try:
-                collect = FastExportFilter(commit_callback=lambda c: self.remember_commits(n, c))
-                collect.run(export.stdout, exported_store.file)
-            except Exception, e:
-                logging.error("Error in memorizing export for %s [%d]: %s", input_repo, n, e)
-                raise
-            finally:
-                exported_store.close()
-                self.in_progress_stores.remove(exported_store)
-                self.completed_temporary_stores.append(exported_store)
-
     def create_merged_export(self):
-        self.weave_store = self.tmp_export_file(basename(self.output_dir), "-weave.git-fast-export", "weaved export")
-        self.in_progress_stores.append(self.weave_store)
+        self.weave_store = self.open_export_file(basename(self.output_dir), "-weave.git-fast-export", "weaved export")
         self.target = self.weave_store.file
         self.production_in_progress = {n: False for n, store in enumerate(self.exported_stores, start=1)}
         try:
@@ -212,28 +266,21 @@ class InterleaveRepositories:
                 finally:
                     exported_store.close()
             self.write_commits()
+            self.weave_store.close()
         except Exception, e:
             logging.error("Error weaving commits into new repository: %s", e)
             raise
-        finally:
-            self.weave_store.close()
-            self.in_progress_stores.remove(self.weave_store)
-            self.completed_temporary_stores.append(self.weave_store)
 
     def import_merged_export(self):
         self.weave_store.open_for_read()
-        try:
-            self.target = fast_import_input(self.output_dir, import_input=self.weave_store.file)
-            # Wait for git-fast-import to complete (only necessary since we passed
-            # file objects to FastExportFilter.run; and even then the worst that
-            # happens is git-fast-import completes after this python script does)
-            self.target.wait()
-        finally:
-            self.weave_store.close()
+        self.target = fast_import_input(self.output_dir, import_input=self.weave_store.file)
+        # Wait for git-fast-import to complete (only necessary since we passed
+        # file objects to FastExportFilter.run; and even then the worst that
+        # happens is git-fast-import completes after this python script does)
+        self.target.wait()
+        self.weave_store.close()
 
     def run(self):
-        self.in_progress_stores = []
-        self.completed_temporary_stores = []
         success = False
         try:
             self.collect_commits()
@@ -246,20 +293,18 @@ class InterleaveRepositories:
             success = True
         finally:
             if success:
-                for store in self.completed_temporary_stores:
+                for store in self.intermediate_files:
                     store.remove_file()
             else:
-                for store in self.in_progress_stores:
-                    store.close()
-                    store.handle_failure(self.failure_base_dir, in_progress=True)
-                for store in self.completed_temporary_stores:
-                    store.handle_failure(self.failure_base_dir, in_progress=False)
+                for store in self.intermediate_files:
+                    store.handle_failure(self.failure_base_dir)
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser()
     parser.add_argument("-t", "--tmpdir", default=tempfile.gettempdir(),
                         help="Override temporary directory for intermediate files")
+    parser.add_argument("-T", "--tmplabel", help="Create/reuse temporary files with this label for reuse in debugging")
     parser.add_argument("repos", nargs="+", help="list of repositories to join")
     parser.add_argument("output_repo", help="target repository to create")
     args = parser.parse_args()
