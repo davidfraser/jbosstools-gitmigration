@@ -52,6 +52,7 @@ class InterleaveRepositories:
         self.repo1 = repo1
         self.repo2 = repo2
         self.output_dir = output_dir
+        self.failure_base_dir = dirname(abspath(self.output_dir))
 
         # commit_branches maps branch -> repo -> ordered list of (commit_date, repo, commit_id)
         self.commit_branches = {}
@@ -173,34 +174,36 @@ class InterleaveRepositories:
             logging.info("finished repo %s", repo)
             self.production_in_progress.pop(repo)
 
-    def run(self):
+    def collect_commits(self):
         input1 = fast_export_output(self.repo1)
         input2 = fast_export_output(self.repo2)
-        store1 = TemporaryOutput(basename(self.repo1), ".git-fast-export", "export")
-        store2 = TemporaryOutput(basename(self.repo2), ".git-fast-export", "export")
-        failure_base_dir = dirname(abspath(self.output_dir))
+        self.store1 = TemporaryOutput(basename(self.repo1), ".git-fast-export", "export")
+        self.store2 = TemporaryOutput(basename(self.repo2), ".git-fast-export", "export")
         success = False
         try:
             collect1 = FastExportFilter(commit_callback=lambda c: self.remember_commits(1, c))
-            collect1.run(input1.stdout, store1.file)
+            collect1.run(input1.stdout, self.store1.file)
             collect2 = FastExportFilter(commit_callback=lambda c: self.remember_commits(2, c))
-            collect2.run(input2.stdout, store2.file)
+            collect2.run(input2.stdout, self.store2.file)
             success = True
         except Exception, e:
             logging.error("Error in memorizing export: %s", e)
             raise
         finally:
-            store1.close()
-            store2.close()
+            self.store1.close()
+            self.store2.close()
             if not success:
-                store1.handle_failure(failure_base_dir, in_progress=True)
-                store2.handle_failure(failure_base_dir, in_progress=True)
+                self.store1.handle_failure(self.failure_base_dir, in_progress=True)
+                self.store2.handle_failure(self.failure_base_dir, in_progress=True)
+
+    def run(self):
+        self.collect_commits()
         self.merge_branches()
 
         # Reset the _next_id so that it's like we're starting afresh
         _IDS._next_id = 1
-        store1.open_for_read()
-        store2.open_for_read()
+        self.store1.open_for_read()
+        self.store2.open_for_read()
         success = False
         weave_store = TemporaryOutput(basename(self.output_dir), "-weave.git-fast-export", "weaved export")
         self.target = weave_store.file
@@ -208,11 +211,11 @@ class InterleaveRepositories:
             filter1 = FastExportFilter(reset_callback=lambda r: self.skip_reset(r),
                                        commit_callback=lambda c: self.weave_commit(1, c))
             self.production_in_progress = {1: True, 2: True}
-            self.run_weave(1, filter1, store1.file, weave_store.file, id_offset=0)
+            self.run_weave(1, filter1, self.store1.file, weave_store.file, id_offset=0)
 
             filter2 = FastExportFilter(reset_callback=lambda r: self.skip_reset(r),
                                        commit_callback=lambda c: self.weave_commit(2, c))
-            self.run_weave(2, filter2, store2.file, weave_store.file, id_offset=0)
+            self.run_weave(2, filter2, self.store2.file, weave_store.file, id_offset=0)
 
             self.write_commits()
             success = True
@@ -220,13 +223,13 @@ class InterleaveRepositories:
             logging.error("Error weaving commits into new repository: %s", e)
             raise
         finally:
-            store1.close()
-            store2.close()
+            self.store1.close()
+            self.store2.close()
             weave_store.close()
             if not success:
-                store1.handle_failure(failure_base_dir, in_progress=False)
-                store2.handle_failure(failure_base_dir, in_progress=False)
-                weave_store.handle_failure(failure_base_dir, in_progress=True)
+                self.store1.handle_failure(self.failure_base_dir, in_progress=False)
+                self.store2.handle_failure(self.failure_base_dir, in_progress=False)
+                weave_store.handle_failure(self.failure_base_dir, in_progress=True)
 
         success = False
         weave_store.open_for_read()
@@ -240,18 +243,18 @@ class InterleaveRepositories:
         finally:
             weave_store.close()
             if success:
-                store1.remove_file()
-                store2.remove_file()
+                self.store1.remove_file()
+                self.store2.remove_file()
                 weave_store.remove_file()
             else:
-                store1.handle_failure(failure_base_dir, in_progress=False)
-                store2.handle_failure(failure_base_dir, in_progress=False)
-                weave_store.handle_failure(failure_base_dir, in_progress=False)
+                self.store1.handle_failure(self.failure_base_dir, in_progress=False)
+                self.store2.handle_failure(self.failure_base_dir, in_progress=False)
+                weave_store.handle_failure(self.failure_base_dir, in_progress=False)
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser()
-    parser.add_argument("repos", nargs=2, help="list of repositories (or git fast-export files) to join")
+    parser.add_argument("repos", nargs=2, help="list of repositories to join")
     parser.add_argument("output_repo", help="target repository to create")
     args = parser.parse_args()
     splicer = InterleaveRepositories(args.repos[0], args.repos[1], args.output_repo)
