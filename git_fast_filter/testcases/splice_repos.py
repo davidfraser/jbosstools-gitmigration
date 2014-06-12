@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import argparse
 import os
 import shutil
 import sys
@@ -100,6 +101,9 @@ class InterleaveRepositories:
                     branch_maps = [repo_maps[repo] for repo in sorted(repo_maps)]
             combined_commits.reverse()
         for branch, parent_commits in branch_parents.items():
+            if (None, None) in parent_commits:
+                # if one of the starts of the branches does not have any parents, skip it
+                continue
             tail_repo, tail_commit_id = self.combined_branches[branch][0]
             parent_commits = [(self.commit_dates[repo, commit_id], repo, commit_id)
                               for repo, commit_id in parent_commits if commit_id is not None]
@@ -138,16 +142,14 @@ class InterleaveRepositories:
                     depends_on = self.changed_parents[repo, commit_id][1]
                 else:
                     depends_on = commit_map[repo, commit_id].from_commit
-                if depends_on and depends_on not in self.written_commits:
-                    continue
-                else:
+                if not depends_on or depends_on in self.written_commits:
                     combined_commits.pop(0)
-                commit = commit_map.pop((repo, commit_id))
-                available_commits.append((branch, repo, commit_id, commit))
-                if not commit_map:
-                    del self.pending_commits[branch]
-                if not combined_commits:
-                    self.combined_branches.pop(branch)
+                    commit = commit_map.pop((repo, commit_id))
+                    available_commits.append((branch, repo, commit_id, commit))
+                    if not commit_map:
+                        del self.pending_commits[branch]
+                    if not combined_commits:
+                        self.combined_branches.pop(branch)
         return available_commits
 
     def write_commits(self):
@@ -161,6 +163,8 @@ class InterleaveRepositories:
                     # print("writing on branch %s repo %s commit_id %s/%s" % (branch, repo, commit_id, commit.id))
                     self.write_commit(repo, commit)
                     # print "production_in_progress", self.production_in_progress
+            else:
+                print ("No available commits")
 
     def run_weave(self, repo, export_filter, source, target, id_offset=None):
         try:
@@ -246,6 +250,10 @@ class InterleaveRepositories:
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
-    splicer = InterleaveRepositories(sys.argv[1], sys.argv[2], sys.argv[3])
+    parser = argparse.ArgumentParser()
+    parser.add_argument("repos", nargs=2, help="list of repositories (or git fast-export files) to join")
+    parser.add_argument("output_repo", help="target repository to create")
+    args = parser.parse_args()
+    splicer = InterleaveRepositories(args.repos[0], args.repos[1], args.output_repo)
     splicer.run()
 

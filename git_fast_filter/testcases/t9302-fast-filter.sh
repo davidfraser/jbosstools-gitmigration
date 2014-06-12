@@ -131,6 +131,27 @@ test_expect_success 'splice_repos.py' '
          test 4 = $(git rev-list master | wc -l))
 '
 
+test_expect_success 'setup two interrelated branched repositories ' '
+mkdir repoA
+mkdir repoB
+cd repoA
+git init
+cd ../repoB
+git init
+test_tick ; cd ../repoA ; echo 'test A' > A ; git add A ; git commit -m "add A"
+test_tick ; cd ../repoB ; echo 'test B' > B ; git add B ; git commit -m "add B"
+test_tick ; cd ../repoA ; echo 'test A2' > A ; git add A ; git commit -m "change A"
+test_tick ; cd ../repoB ; echo 'test B2' > B ; git add B ; git commit -m "change B"
+test_tick ; cd ../repoA ; git checkout -b the-branch
+test_tick ; cd ../repoB ; git checkout -b the-branch
+test_tick ; cd ../repoA ; echo 'test A3' > A ; git add A ; git commit -m "change A on branch"
+test_tick ; cd ../repoB ; echo 'test B3' > B ; git add B ; git commit -m "change B on branch"
+test_tick ; cd ../repoA ; git checkout master
+test_tick ; cd ../repoB ; git checkout master
+test_tick ; cd ../repoA ; echo 'test A4' > A ; git add A ; git commit -m "change A on master"
+test_tick ; cd ../repoB ; echo 'test B4' > B ; git add B ; git commit -m "change B on master"
+'
+
 test_expect_success 'create_fast_export_output.py' '
 	rm -rf new &&
 	mkdir new &&
