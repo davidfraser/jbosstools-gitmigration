@@ -171,14 +171,22 @@ class InterleaveRepositories:
                         repo_branch_commits.append((self.commit_dates[repo_num, commit_id], repo_num, commit_id))
             last_repo, last_commit_id = None, None
             while repo_branches:
-                last_commits = [commits[-1] for _, commits in sorted(repo_branches.items())]
+                last_commits = [commits[0] for _, commits in sorted(repo_branches.items())]
                 committer_date, repo_num, commit_id = max(last_commits)
                 commits = repo_branches[repo_num]
-                commits.pop(-1)
+                commits.pop(0)
                 combined_commits.append((repo_num, commit_id))
                 if last_commit_id is not None:
                     parent_repo_num, parent_commit_id = self.commit_parents[last_repo, last_commit_id]
                     if (parent_repo_num, parent_commit_id) != (repo_num, commit_id):
+                        if (last_repo, last_commit_id) in self.changed_parents:
+                            assigned_repo, assigned_commit_id = self.changed_parents[last_repo, last_commit_id]
+                            if (assigned_repo, assigned_commit_id) != (repo_num, commit_id):
+                                logging.error("%d:%d on branch %s already maps to %d:%d but must also map to %d:%d",
+                                            last_repo, last_commit_id, branch, assigned_repo, assigned_commit_id,
+                                            repo_num, commit_id)
+                                raise ValueError("Commit %d:%d on branch %s requires two parents" %
+                                                 (last_repo, last_commit_id, branch))
                         self.changed_parents[last_repo, last_commit_id] = repo_num, commit_id
                 last_repo, last_commit_id = repo_num, commit_id
                 if not commits:
