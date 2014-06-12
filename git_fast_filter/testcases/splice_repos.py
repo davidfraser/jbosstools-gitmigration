@@ -118,11 +118,11 @@ class InterleaveRepositories:
         reset.skip()
 
     @staticmethod
-    def jsonize_commit(repo, commit):
-        return (repo, commit.id, commit.branch, datetime_to_json(commit.committer_date), commit.from_commit)
+    def jsonize_commit(commit):
+        return (commit.id, commit.branch, datetime_to_json(commit.committer_date), commit.from_commit)
 
-    def remember_commits(self, stored_commits):
-        for repo, commit_id, commit_branch, committer_date_parts, from_commit in stored_commits:
+    def remember_commits(self, repo, stored_commits):
+        for commit_id, commit_branch, committer_date_parts, from_commit in stored_commits:
             committer_date = json_to_datetime(committer_date_parts)
             self.commit_branches.setdefault(commit_branch, {}).setdefault(repo, []).append(
                 (committer_date, repo, commit_id))
@@ -132,31 +132,34 @@ class InterleaveRepositories:
 
     def collect_commits(self):
         self.exported_stores = []
-        for n, input_repo in enumerate(self.input_repos, start=1):
+        for repo_num, input_repo in enumerate(self.input_repos, start=1):
             repo_name = basename(input_repo)
             remember_commits_file = self.open_export_file(repo_name, ".remember-commits.json", "commit info")
             exported_store = self.open_export_file(repo_name, ".git-fast-export", "export",
                                                    overwrite=not remember_commits_file.exists)
             self.exported_stores.append(exported_store)
             if exported_store.exists:
+                logging.info("Reading remembered commits for repository %s [%d]", repo_name, repo_num)
                 stored_commits = json.load(remember_commits_file.file)
                 remember_commits_file.close()
             else:
+                logging.info("Doing export on repository %s [%d]", repo_name, repo_num)
                 stored_commits = []
                 export = fast_export_output(input_repo)
                 try:
-                    collect = FastExportFilter(commit_callback=lambda c: stored_commits.append(self.jsonize_commit(n, c)))
+                    collect = FastExportFilter(commit_callback=lambda c: stored_commits.append(self.jsonize_commit(c)))
                     collect.run(export.stdout, exported_store.file)
                     exported_store.close()
                     json.dump(stored_commits, remember_commits_file.file, indent=4)
                     remember_commits_file.close()
                 except Exception, e:
-                    logging.error("Error in memorizing export for %s [%d]: %s", input_repo, n, e)
+                    logging.error("Error in memorizing export for %s [%d]: %s", input_repo, repo_num, e)
                     raise
-            self.remember_commits(stored_commits)
+            self.remember_commits(repo_num, stored_commits)
 
-    def merge_branches(self):
+    def weave_branches(self):
         """for each branch, calculate how combining repos should change parents of commits"""
+        logging.info("Weaving %d branches from %d repositories", len(self.commit_branches), len(self.input_repos))
         branch_parents = {}
         for branch, repo_maps in self.commit_branches.items():
             self.combined_branches[branch] = combined_commits = []
@@ -189,7 +192,7 @@ class InterleaveRepositories:
             if not parent_commits:
                 logging.info("Branch %s has no parents", branch)
                 continue
-            # TODO: Check that these parents all splice together nicely anyway
+            # TODO: Check that these parents all weave together nicely anyway
             _, branch_parent_repo, branch_parent_id = parent_commits[-1]
             logging.info("Found parent for branch %s tail %s:%s - %s:%s",
                          branch, tail_repo, tail_commit_id, branch_parent_repo, branch_parent_id)
@@ -252,18 +255,18 @@ class InterleaveRepositories:
             logging.info("finished repo %s", repo)
             self.production_in_progress.pop(repo)
 
-    def create_merged_export(self):
+    def create_woven_export(self):
         self.weave_store = self.open_export_file(basename(self.output_dir), "-weave.git-fast-export", "weaved export", overwrite=True)
         self.target = self.weave_store.file
-        self.production_in_progress = {n: False for n, store in enumerate(self.exported_stores, start=1)}
+        self.production_in_progress = {repo_num: False for repo_num, store in enumerate(self.exported_stores, start=1)}
         try:
-            for n, exported_store in enumerate(self.exported_stores, start=1):
+            for repo_num, exported_store in enumerate(self.exported_stores, start=1):
                 exported_store.open_for_read()
                 try:
                     export_filter = FastExportFilter(reset_callback=lambda r: self.skip_reset(r),
-                                                     commit_callback=lambda c: self.weave_commit(n, c))
-                    self.production_in_progress[n] = True
-                    self.run_weave(n, export_filter, exported_store.file, self.weave_store.file, id_offset=0)
+                                                     commit_callback=lambda c: self.weave_commit(repo_num, c))
+                    self.production_in_progress[repo_num] = True
+                    self.run_weave(repo_num, export_filter, exported_store.file, self.weave_store.file, id_offset=0)
                 finally:
                     exported_store.close()
             self.write_commits()
@@ -272,7 +275,8 @@ class InterleaveRepositories:
             logging.error("Error weaving commits into new repository: %s", e)
             raise
 
-    def import_merged_export(self):
+    def import_woven_export(self):
+        logging.info("Importing woven result into %s", self.weave_store.filename)
         self.weave_store.open_for_read()
         self.target = fast_import_input(self.output_dir, import_input=self.weave_store.file)
         # Wait for git-fast-import to complete (only necessary since we passed
@@ -285,12 +289,12 @@ class InterleaveRepositories:
         success = False
         try:
             self.collect_commits()
-            self.merge_branches()
+            self.weave_branches()
 
             # Reset the _next_id so that it's like we're starting afresh
             _IDS._next_id = 1
-            self.create_merged_export()
-            self.import_merged_export()
+            self.create_woven_export()
+            self.import_woven_export()
             success = True
         finally:
             if success:
@@ -309,6 +313,6 @@ if __name__ == '__main__':
     parser.add_argument("repos", nargs="+", help="list of repositories to join")
     parser.add_argument("output_repo", help="target repository to create")
     args = parser.parse_args()
-    splicer = InterleaveRepositories(args)
-    splicer.run()
+    weaver = InterleaveRepositories(args)
+    weaver.run()
 
