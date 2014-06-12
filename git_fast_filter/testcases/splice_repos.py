@@ -196,26 +196,21 @@ class InterleaveRepositories:
                 self.store1.handle_failure(self.failure_base_dir, in_progress=True)
                 self.store2.handle_failure(self.failure_base_dir, in_progress=True)
 
-    def run(self):
-        self.collect_commits()
-        self.merge_branches()
-
-        # Reset the _next_id so that it's like we're starting afresh
-        _IDS._next_id = 1
+    def create_merged_export(self):
         self.store1.open_for_read()
         self.store2.open_for_read()
         success = False
-        weave_store = TemporaryOutput(basename(self.output_dir), "-weave.git-fast-export", "weaved export")
-        self.target = weave_store.file
+        self.weave_store = TemporaryOutput(basename(self.output_dir), "-weave.git-fast-export", "weaved export")
+        self.target = self.weave_store.file
         try:
             filter1 = FastExportFilter(reset_callback=lambda r: self.skip_reset(r),
                                        commit_callback=lambda c: self.weave_commit(1, c))
             self.production_in_progress = {1: True, 2: True}
-            self.run_weave(1, filter1, self.store1.file, weave_store.file, id_offset=0)
+            self.run_weave(1, filter1, self.store1.file, self.weave_store.file, id_offset=0)
 
             filter2 = FastExportFilter(reset_callback=lambda r: self.skip_reset(r),
                                        commit_callback=lambda c: self.weave_commit(2, c))
-            self.run_weave(2, filter2, self.store2.file, weave_store.file, id_offset=0)
+            self.run_weave(2, filter2, self.store2.file, self.weave_store.file, id_offset=0)
 
             self.write_commits()
             success = True
@@ -225,31 +220,42 @@ class InterleaveRepositories:
         finally:
             self.store1.close()
             self.store2.close()
-            weave_store.close()
+            self.weave_store.close()
             if not success:
                 self.store1.handle_failure(self.failure_base_dir, in_progress=False)
                 self.store2.handle_failure(self.failure_base_dir, in_progress=False)
-                weave_store.handle_failure(self.failure_base_dir, in_progress=True)
+                self.weave_store.handle_failure(self.failure_base_dir, in_progress=True)
+        return self.weave_store
 
+    def import_merged_export(self):
         success = False
-        weave_store.open_for_read()
+        self.weave_store.open_for_read()
         try:
-            self.target = fast_import_input(self.output_dir, import_input=weave_store.file)
+            self.target = fast_import_input(self.output_dir, import_input=self.weave_store.file)
             # Wait for git-fast-import to complete (only necessary since we passed
             # file objects to FastExportFilter.run; and even then the worst that
             # happens is git-fast-import completes after this python script does)
             self.target.wait()
             success = True
         finally:
-            weave_store.close()
+            self.weave_store.close()
             if success:
                 self.store1.remove_file()
                 self.store2.remove_file()
-                weave_store.remove_file()
+                self.weave_store.remove_file()
             else:
                 self.store1.handle_failure(self.failure_base_dir, in_progress=False)
                 self.store2.handle_failure(self.failure_base_dir, in_progress=False)
-                weave_store.handle_failure(self.failure_base_dir, in_progress=False)
+                self.weave_store.handle_failure(self.failure_base_dir, in_progress=False)
+
+    def run(self):
+        self.collect_commits()
+        self.merge_branches()
+
+        # Reset the _next_id so that it's like we're starting afresh
+        _IDS._next_id = 1
+        self.create_merged_export()
+        self.import_merged_export()
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
