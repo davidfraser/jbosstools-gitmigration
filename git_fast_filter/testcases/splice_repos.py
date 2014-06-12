@@ -179,28 +179,28 @@ class InterleaveRepositories:
         input2 = fast_export_output(self.repo2)
         self.store1 = TemporaryOutput(basename(self.repo1), ".git-fast-export", "export")
         self.store2 = TemporaryOutput(basename(self.repo2), ".git-fast-export", "export")
-        success = False
+        self.in_progress_stores += [self.store1, self.store2]
         try:
             collect1 = FastExportFilter(commit_callback=lambda c: self.remember_commits(1, c))
             collect1.run(input1.stdout, self.store1.file)
             collect2 = FastExportFilter(commit_callback=lambda c: self.remember_commits(2, c))
             collect2.run(input2.stdout, self.store2.file)
-            success = True
         except Exception, e:
             logging.error("Error in memorizing export: %s", e)
             raise
         finally:
             self.store1.close()
+            self.in_progress_stores.remove(self.store1)
+            self.completed_temporary_stores.append(self.store1)
             self.store2.close()
-            if not success:
-                self.store1.handle_failure(self.failure_base_dir, in_progress=True)
-                self.store2.handle_failure(self.failure_base_dir, in_progress=True)
+            self.in_progress_stores.remove(self.store2)
+            self.completed_temporary_stores.append(self.store2)
 
     def create_merged_export(self):
         self.store1.open_for_read()
         self.store2.open_for_read()
-        success = False
         self.weave_store = TemporaryOutput(basename(self.output_dir), "-weave.git-fast-export", "weaved export")
+        self.in_progress_stores.append(self.weave_store)
         self.target = self.weave_store.file
         try:
             filter1 = FastExportFilter(reset_callback=lambda r: self.skip_reset(r),
@@ -213,7 +213,6 @@ class InterleaveRepositories:
             self.run_weave(2, filter2, self.store2.file, self.weave_store.file, id_offset=0)
 
             self.write_commits()
-            success = True
         except Exception, e:
             logging.error("Error weaving commits into new repository: %s", e)
             raise
@@ -221,14 +220,10 @@ class InterleaveRepositories:
             self.store1.close()
             self.store2.close()
             self.weave_store.close()
-            if not success:
-                self.store1.handle_failure(self.failure_base_dir, in_progress=False)
-                self.store2.handle_failure(self.failure_base_dir, in_progress=False)
-                self.weave_store.handle_failure(self.failure_base_dir, in_progress=True)
-        return self.weave_store
+            self.in_progress_stores.remove(self.weave_store)
+            self.completed_temporary_stores.append(self.weave_store)
 
     def import_merged_export(self):
-        success = False
         self.weave_store.open_for_read()
         try:
             self.target = fast_import_input(self.output_dir, import_input=self.weave_store.file)
@@ -236,26 +231,32 @@ class InterleaveRepositories:
             # file objects to FastExportFilter.run; and even then the worst that
             # happens is git-fast-import completes after this python script does)
             self.target.wait()
-            success = True
         finally:
             self.weave_store.close()
-            if success:
-                self.store1.remove_file()
-                self.store2.remove_file()
-                self.weave_store.remove_file()
-            else:
-                self.store1.handle_failure(self.failure_base_dir, in_progress=False)
-                self.store2.handle_failure(self.failure_base_dir, in_progress=False)
-                self.weave_store.handle_failure(self.failure_base_dir, in_progress=False)
 
     def run(self):
-        self.collect_commits()
-        self.merge_branches()
+        self.in_progress_stores = []
+        self.completed_temporary_stores = []
+        success = False
+        try:
+            self.collect_commits()
+            self.merge_branches()
 
-        # Reset the _next_id so that it's like we're starting afresh
-        _IDS._next_id = 1
-        self.create_merged_export()
-        self.import_merged_export()
+            # Reset the _next_id so that it's like we're starting afresh
+            _IDS._next_id = 1
+            self.create_merged_export()
+            self.import_merged_export()
+            success = True
+        finally:
+            if success:
+                for store in self.completed_temporary_stores:
+                    store.remove_file()
+            else:
+                for store in self.in_progress_stores:
+                    store.close()
+                    store.handle_failure(self.failure_base_dir, in_progress=True)
+                for store in self.completed_temporary_stores:
+                    store.handle_failure(self.failure_base_dir, in_progress=False)
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
