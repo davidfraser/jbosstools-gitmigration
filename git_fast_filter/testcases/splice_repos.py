@@ -33,7 +33,7 @@ class IntermediateFile(object):
     Can handle random file names or fixed ones, in which case a previously created file will be reused
     Handles reopening the files for reading later, and tracking if the file is still in progress being created
     Handles failure and remembers whether the file has been closed"""
-    def __init__(self, label, suffix, description, dir=None, fixed_name=None):
+    def __init__(self, label, suffix, description, dir=None, fixed_name=None, overwrite=False):
         self.label = label
         self.description = description
         self.exists = False
@@ -41,7 +41,7 @@ class IntermediateFile(object):
         self.closed = False
         if fixed_name:
             self.filename = os.path.join(dir or tempfile.gettempdir(), "%s-%s%s" % (label, fixed_name, suffix))
-            if exists(self.filename) and os.stat(self.filename).st_size > 0:
+            if exists(self.filename) and os.stat(self.filename).st_size > 0 and not overwrite:
                 self.file = open(self.filename, 'rb')
                 self.exists = True
                 self.in_progress = False
@@ -108,8 +108,9 @@ class InterleaveRepositories:
         # maps branch -> (repo, commit_id) -> commit_object for those commits that have yet to be written
         self.pending_commits = {}
 
-    def open_export_file(self, label, suffix, description):
-        file_wrapper = IntermediateFile(label, suffix, description, dir=self.tmpdir, fixed_name=self.tmplabel)
+    def open_export_file(self, label, suffix, description, overwrite=False):
+        file_wrapper = IntermediateFile(label, suffix, description,
+                                        dir=self.tmpdir, fixed_name=self.tmplabel, overwrite=overwrite)
         self.intermediate_files.append(file_wrapper)
         return file_wrapper
 
@@ -132,13 +133,12 @@ class InterleaveRepositories:
     def collect_commits(self):
         self.exported_stores = []
         for n, input_repo in enumerate(self.input_repos, start=1):
-            exported_store = self.open_export_file(basename(input_repo), ".git-fast-export", "export")
+            repo_name = basename(input_repo)
+            remember_commits_file = self.open_export_file(repo_name, ".remember-commits.json", "commit info")
+            exported_store = self.open_export_file(repo_name, ".git-fast-export", "export",
+                                                   overwrite=not remember_commits_file.exists)
             self.exported_stores.append(exported_store)
-            remember_commits_file = self.open_export_file(basename(input_repo), ".remember-commits.json", "commit info")
             if exported_store.exists:
-                if not remember_commits_file.exists:
-                    raise ValueError("Cannot reuse previous export %s as %s has been lost",
-                                     exported_store.filename, remember_commits_file.filename)
                 stored_commits = json.load(remember_commits_file.file)
                 remember_commits_file.close()
             else:
@@ -242,7 +242,8 @@ class InterleaveRepositories:
                     self.write_commit(repo, commit)
                     # print "production_in_progress", self.production_in_progress
             else:
-                print ("No available commits")
+                # this means the algorithm has got stuck and can't resolve the situation
+                raise ValueError("No available commits")
 
     def run_weave(self, repo, export_filter, source, target, id_offset=None):
         try:
@@ -252,7 +253,7 @@ class InterleaveRepositories:
             self.production_in_progress.pop(repo)
 
     def create_merged_export(self):
-        self.weave_store = self.open_export_file(basename(self.output_dir), "-weave.git-fast-export", "weaved export")
+        self.weave_store = self.open_export_file(basename(self.output_dir), "-weave.git-fast-export", "weaved export", overwrite=True)
         self.target = self.weave_store.file
         self.production_in_progress = {n: False for n, store in enumerate(self.exported_stores, start=1)}
         try:
