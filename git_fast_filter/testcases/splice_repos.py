@@ -93,8 +93,8 @@ class InterleaveRepositories:
         self.tmplabel = args.tmplabel
         self.intermediate_files = []
 
-        # commit_branches maps branch -> repo -> ordered list of (commit_date, repo, commit_id)
-        self.commit_branches = {}
+        # the head of each branch: branch -> repo -> head commit_id
+        self.commit_branch_ends = {}
         # just remember the commit dates for everything
         self.commit_dates = {}
         # commit_parents maps (repo, commit_id) -> (repo, parent_id)
@@ -124,8 +124,7 @@ class InterleaveRepositories:
     def remember_commits(self, repo, stored_commits):
         for commit_id, commit_branch, committer_date_parts, from_commit in stored_commits:
             committer_date = json_to_datetime(committer_date_parts)
-            self.commit_branches.setdefault(commit_branch, {}).setdefault(repo, []).append(
-                (committer_date, repo, commit_id))
+            self.commit_branch_ends.setdefault(commit_branch, {})[repo] = commit_id
             self.commit_parents[repo, commit_id] = (repo, from_commit)
             self.commit_dates[repo, commit_id] = committer_date
 
@@ -159,44 +158,32 @@ class InterleaveRepositories:
 
     def weave_branches(self):
         """for each branch, calculate how combining repos should change parents of commits"""
-        logging.info("Weaving %d branches from %d repositories", len(self.commit_branches), len(self.input_repos))
-        branch_parents = {}
-        for branch, repo_maps in self.commit_branches.items():
+        logging.info("Weaving %d branches from %d repositories", len(self.commit_branch_ends), len(self.input_repos))
+        for branch, repo_heads in self.commit_branch_ends.items():
             self.combined_branches[branch] = combined_commits = []
-            branch_maps = [repo_maps[repo] for repo in sorted(repo_maps)]
+            repo_branches = {}
+            for repo_num, commit_id in sorted(repo_heads.items()):
+                committer_date = self.commit_dates[repo_num, commit_id]
+                repo_branches[repo_num] = repo_branch_commits = [(committer_date, repo_num, commit_id)]
+                while (repo_num, commit_id) in self.commit_parents:
+                    _, commit_id = self.commit_parents[repo_num, commit_id]
+                    if commit_id is not None:
+                        repo_branch_commits.append((self.commit_dates[repo_num, commit_id], repo_num, commit_id))
             last_repo, last_commit_id = None, None
-            head_commits = [branch_map[0] for branch_map in branch_maps]
-            np = (None, None)
-            branch_parents[branch] = [self.commit_parents.get((repo, commit_id), np) for _, repo, commit_id in head_commits]
-            while branch_maps:
-                last_commits = [branch_map[-1] for branch_map in branch_maps]
-                committer_date, repo, commit_id = max(last_commits)
-                branch_map = repo_maps[repo]
-                branch_map.pop(-1)
-                combined_commits.append((repo, commit_id))
-                if last_commit_id is not None and self.commit_parents[last_repo, last_commit_id] != (repo, commit_id):
-                    self.changed_parents[last_repo, last_commit_id] = repo, commit_id
-                last_repo, last_commit_id = repo, commit_id
-                if not branch_map:
-                    repo_maps.pop(repo)
-                    branch_maps = [repo_maps[repo] for repo in sorted(repo_maps)]
+            while repo_branches:
+                last_commits = [commits[-1] for _, commits in sorted(repo_branches.items())]
+                committer_date, repo_num, commit_id = max(last_commits)
+                commits = repo_branches[repo_num]
+                commits.pop(-1)
+                combined_commits.append((repo_num, commit_id))
+                if last_commit_id is not None:
+                    parent_repo_num, parent_commit_id = self.commit_parents[last_repo, last_commit_id]
+                    if (parent_repo_num, parent_commit_id) != (repo_num, commit_id):
+                        self.changed_parents[last_repo, last_commit_id] = repo_num, commit_id
+                last_repo, last_commit_id = repo_num, commit_id
+                if not commits:
+                    repo_branches.pop(repo_num)
             combined_commits.reverse()
-        for branch, parent_commits in branch_parents.items():
-            if (None, None) in parent_commits:
-                # if one of the starts of the branches does not have any parents, skip it
-                continue
-            tail_repo, tail_commit_id = self.combined_branches[branch][0]
-            parent_commits = [(self.commit_dates[repo, commit_id], repo, commit_id)
-                              for repo, commit_id in parent_commits if commit_id is not None]
-            parent_commits.sort()
-            if not parent_commits:
-                logging.info("Branch %s has no parents", branch)
-                continue
-            # TODO: Check that these parents all weave together nicely anyway
-            _, branch_parent_repo, branch_parent_id = parent_commits[-1]
-            logging.info("Found parent for branch %s tail %s:%s - %s:%s",
-                         branch, tail_repo, tail_commit_id, branch_parent_repo, branch_parent_id)
-            self.changed_parents[tail_repo, tail_commit_id] = branch_parent_repo, branch_parent_id
 
     def weave_commit(self, repo, commit):
         # print "weave", repo, commit.id, commit.old_id, commit.message
