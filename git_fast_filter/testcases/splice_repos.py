@@ -91,6 +91,7 @@ class InterleaveRepositories:
         self.failure_base_dir = dirname(abspath(self.output_dir))
         self.tmpdir = abspath(args.tmpdir)
         self.tmplabel = args.tmplabel
+        self.keep_files = args.keep
         self.intermediate_files = []
 
         # the head of each branch: branch -> repo -> head commit_id
@@ -304,7 +305,10 @@ class InterleaveRepositories:
         finally:
             if success:
                 for store in self.intermediate_files:
-                    store.remove_file()
+                    if self.keep_files:
+                        logging.info("Keeping %s for %s in %s", store.description, store.label, store.filename)
+                    else:
+                        store.remove_file()
             else:
                 for store in self.intermediate_files:
                     store.handle_failure(self.failure_base_dir)
@@ -315,6 +319,7 @@ if __name__ == '__main__':
     parser.add_argument("-t", "--tmpdir", default=tempfile.gettempdir(),
                         help="Override temporary directory for intermediate files")
     parser.add_argument("-T", "--tmplabel", help="Create/reuse temporary files with this label for reuse in debugging")
+    parser.add_argument("-k", "--keep", action="store_true", help="Keep intermediate files even on success")
     parser.add_argument("repos", nargs="+", help="list of repositories to join")
     parser.add_argument("output_repo", help="target repository to create")
     args = parser.parse_args()
