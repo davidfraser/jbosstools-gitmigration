@@ -104,9 +104,11 @@ class InterleaveRepositories:
         # changed_parents maps (repo, commit_id) -> (new_parent_repo, new_parent_id)
         self.changed_parents = {}
         # keeps track of which commit_ids have been written, so we don't write something before its dependencies
-        self.written_commits = set()
-        # maps branch -> (repo, commit_id) -> commit_object for those commits that have yet to be written
+        self.written_commit_ids = set()
+        # maps (repo, commit_id) -> commit_object for those commits that have yet to be written
         self.pending_commits = {}
+        # maps (repo, commit_id) -> {set of branches}
+        self.commit_owners = {}
 
     def open_export_file(self, label, suffix, description, overwrite=False):
         file_wrapper = IntermediateFile(label, suffix, description,
@@ -176,6 +178,7 @@ class InterleaveRepositories:
                 commits = repo_branches[repo_num]
                 commits.pop(0)
                 combined_commits.append((repo_num, commit_id))
+                self.commit_owners.setdefault((repo_num, commit_id), set()).add(branch)
                 if last_commit_id is not None:
                     parent_repo_num, parent_commit_id = self.commit_parents[last_repo, last_commit_id]
                     if (parent_repo_num, parent_commit_id) != (repo_num, commit_id):
@@ -191,11 +194,13 @@ class InterleaveRepositories:
                 last_repo, last_commit_id = repo_num, commit_id
                 if not commits:
                     repo_branches.pop(repo_num)
+            logging.info("After processing %s, commit_owners has %d unique entries and %d entries",
+                         branch, len(self.commit_owners), sum(len(l) for l in self.commit_owners.values()))
             combined_commits.reverse()
 
     def weave_commit(self, repo, commit):
         # print "weave", repo, commit.id, commit.old_id, commit.message
-        self.pending_commits.setdefault(commit.branch, {})[repo, commit.old_id] = commit
+        self.pending_commits[repo, commit.old_id] = commit
         commit.skip(new_id=commit.id)
 
     def write_commit(self, repo, commit):
@@ -205,37 +210,42 @@ class InterleaveRepositories:
                          repo, commit.old_id, repo, commit.from_commit, prev_repo, prev_commit_id)
             commit.from_commit = prev_commit_id
         commit.dump(self.target.stdin if hasattr(self.target, "stdin") else self.target)
-        self.written_commits.add(commit.old_id)
+        # logging.info("Writing commit %s:%s->%s", repo, commit.old_id, commit.id)
+        self.written_commit_ids.add(commit.old_id)
 
     def get_available_commits(self):
         available_commits = []
-        for branch, commit_map in self.pending_commits.items():
+        for branch, combined_commits in sorted(self.combined_branches.items()):
             # for each branch, look to see if the next commit we need is available
-            combined_commits = self.combined_branches.get(branch, [])
-            if combined_commits and combined_commits[0] in commit_map:
-                repo, commit_id = combined_commits[0]
-                if (repo, commit_id) in self.changed_parents:
-                    depends_on = self.changed_parents[repo, commit_id][1]
+            if not combined_commits:
+                self.combined_branches.pop(branch)
+                continue
+            repo, commit_id = combined_commits[0]
+            if (repo, commit_id) in self.changed_parents:
+                depends_on = self.changed_parents[repo, commit_id][1]
+            else:
+                depends_on = self.commit_parents[repo, commit_id][1]
+            if not depends_on or depends_on in self.written_commit_ids:
+                logging.debug("Found %d:%d to write which belongs to %s", repo, commit_id, ",".join(self.commit_owners[repo, commit_id]))
+                for owner_branch in sorted(self.commit_owners[repo, commit_id]):
+                    owner_combined_commits = self.combined_branches[owner_branch]
+                    owner_combined_commits.remove((repo, commit_id))
+                    if not owner_combined_commits:
+                        self.combined_branches.pop(owner_branch)
+                if (repo, commit_id) in self.pending_commits:
+                    commit = self.pending_commits.pop((repo, commit_id))
                 else:
-                    depends_on = commit_map[repo, commit_id].from_commit
-                if not depends_on or depends_on in self.written_commits:
-                    combined_commits.pop(0)
-                    commit = commit_map.pop((repo, commit_id))
-                    available_commits.append((branch, repo, commit_id, commit))
-                    if not commit_map:
-                        del self.pending_commits[branch]
-                    if not combined_commits:
-                        self.combined_branches.pop(branch)
+                    raise ValueError("couldn't find pending commit %d:%d", repo, commit_id)
+                available_commits.append((repo, commit_id, commit))
         return available_commits
 
     def write_commits(self):
         while self.combined_branches or self.production_in_progress:
-            # print "pending_commits", {branch: commit_map.keys() for branch, commit_map in self.pending_commits.items()}
             # print "combined_branches", {branch: combined_commits[0] for branch, combined_commits in self.combined_branches.items() if combined_commits}
             available_commits = self.get_available_commits()
             # print "available_commits", available_commits
             if available_commits:
-                for branch, repo, commit_id, commit in available_commits:
+                for repo, commit_id, commit in available_commits:
                     # print("writing on branch %s repo %s commit_id %s/%s" % (branch, repo, commit_id, commit.id))
                     self.write_commit(repo, commit)
                     # print "production_in_progress", self.production_in_progress
