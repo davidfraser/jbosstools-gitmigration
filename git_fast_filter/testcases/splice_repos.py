@@ -88,6 +88,7 @@ class InterleaveRepositories:
     def __init__(self, args):
         self.input_repos = args.repos
         self.output_dir = args.output_repo
+        self.output_name = basename(self.output_dir)
         self.failure_base_dir = dirname(abspath(self.output_dir))
         self.tmpdir = abspath(args.tmpdir)
         self.tmplabel = args.tmplabel
@@ -198,6 +199,15 @@ class InterleaveRepositories:
             logging.info("After processing %s, commit_owners has %d unique entries and %d entries",
                          branch, len(self.commit_owners), sum(len(l) for l in self.commit_owners.values()))
             combined_commits.reverse()
+        woven_branches = {
+            "combined_branches": {branch: ["%s:%s" for rc in commits] for branch, commits in self.combined_branches.items()},
+            "commit_parents": {"%s:%s" % k: "%s:%s" % v for k, v in self.commit_parents.items()},
+            "changed_parents": {"%s:%s" % k: "%s:%s" % v for k, v in self.changed_parents.items()},
+            "commit_owners": {"%s:%s" % k: sorted(v) for k, v in self.commit_owners.items()},
+        }
+        woven_branches_file = self.open_export_file(self.output_name, ".remember-weave.json", "weave info", overwrite=True)
+        json.dump(woven_branches, woven_branches_file.file, indent=4)
+        woven_branches_file.close()
 
     def weave_commit(self, repo, commit):
         # print "weave", repo, commit.id, commit.old_id, commit.message
