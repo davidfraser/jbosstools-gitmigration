@@ -109,6 +109,8 @@ class InterleaveRepositories:
         self.written_commit_ids = set()
         # maps (repo, commit_id) -> commit_object for those commits that have yet to be written
         self.pending_commits = {}
+        # maps (repo, commit_id) -> subject (first line of message)
+        self.commit_subjects = {}
         # maps (repo, commit_id) -> {set of branches}
         self.commit_owners = {}
 
@@ -123,14 +125,16 @@ class InterleaveRepositories:
 
     @staticmethod
     def jsonize_commit(commit):
-        return (commit.id, commit.branch, datetime_to_json(commit.committer_date), commit.from_commit)
+        subject = ''.join(commit.message.strip().splitlines()[:1])
+        return (commit.id, commit.branch, datetime_to_json(commit.committer_date), commit.from_commit, subject)
 
     def remember_commits(self, repo, stored_commits):
-        for commit_id, commit_branch, committer_date_parts, from_commit in stored_commits:
+        for commit_id, commit_branch, committer_date_parts, from_commit, subject in stored_commits:
             committer_date = json_to_datetime(committer_date_parts)
             self.commit_branch_ends.setdefault(commit_branch, {})[repo] = commit_id
             self.commit_parents[repo, commit_id] = (repo, from_commit)
             self.commit_dates[repo, commit_id] = committer_date
+            self.commit_subjects[repo, commit_id] = subject
 
 
     def collect_commits(self):
@@ -187,6 +191,14 @@ class InterleaveRepositories:
                         if (last_repo, last_commit_id) in self.changed_parents:
                             assigned_repo, assigned_commit_id = self.changed_parents[last_repo, last_commit_id]
                             if (assigned_repo, assigned_commit_id) != (repo_num, commit_id):
+                                last = (last_repo, last_commit_id)
+                                assigned = (assigned_repo, assigned_commit_id)
+                                logging.info("%d:%d on %s at %s with subject %s", last_repo, last_commit_id,
+                                             branch, self.commit_dates[last], self.commit_subjects[last])
+                                logging.info("%d:%d on %s at %s with subject %s", assigned_repo, assigned_commit_id,
+                                             branch, self.commit_dates[assigned], self.commit_subjects[assigned])
+                                logging.info("%d:%d on %s at %s with subject %s", repo_num, commit_id,
+                                             branch, committer_date, self.commit_subjects[repo_num, commit_id])
                                 logging.error("%d:%d on branch %s already maps to %d:%d but must also map to %d:%d",
                                             last_repo, last_commit_id, branch, assigned_repo, assigned_commit_id,
                                             repo_num, commit_id)
@@ -204,6 +216,7 @@ class InterleaveRepositories:
             "commit_parents": {"%s:%s" % k: "%s:%s" % v for k, v in self.commit_parents.items()},
             "changed_parents": {"%s:%s" % k: "%s:%s" % v for k, v in self.changed_parents.items()},
             "commit_owners": {"%s:%s" % k: sorted(v) for k, v in self.commit_owners.items()},
+            "commit_dates": {"%s:%s" % k: datetime_to_json(d) for k, d in self.commit_dates.items()}
         }
         woven_branches_file = self.open_export_file(self.output_name, ".remember-weave.json", "weave info", overwrite=True)
         json.dump(woven_branches, woven_branches_file.file, indent=4)
