@@ -13,8 +13,8 @@ def main(args):
     branch_excludes = dict(args.branch_excludes)
     file_renames = dict([(src, target) for src, target in args.file_renames if not src.endswith("/")])
     dir_renames = [(src, target) for src, target in args.file_renames if src.endswith("/")]
-    file_excludes = set([target for target in args.file_excludes if not src.endswith("/")])
-    dir_excludes = [target for target in args.file_excludes if src.endswith("/")]
+    file_excludes = set([target for target in args.file_excludes if not target.endswith("/")])
+    dir_excludes = [target for target in args.file_excludes if target.endswith("/")]
     branches_found = set()
     files_found = set()
     def my_commit_callback(commit):
@@ -45,11 +45,11 @@ def main(args):
             if filename in file_excludes:
                 exclude_file = True
             if exclude_file:
-                alter_commit = True
-            else:
                 if filename not in files_found:
                     logging.info("Found file %s - excluding", filename)
                     files_found.add(filename)
+                alter_commit = True
+            else:
                 new_file_changes.append(change)
             if filename != change.filename:
                 if change.filename not in files_found:
