@@ -16,7 +16,6 @@ from git_fast_filter import _IDS
 from git_fast_filter import FixedTimeZone
 
 # TODO: allow incremental update
-# TODO: show out-of-order dates
 # TODO: make this a command-line option
 KEEP_ON_ERROR = True
 
@@ -174,10 +173,17 @@ class InterleaveRepositories:
             for repo_num, commit_id in sorted(repo_heads.items()):
                 committer_date = self.commit_dates[repo_num, commit_id]
                 repo_branches[repo_num] = repo_branch_commits = [(committer_date, repo_num, commit_id)]
+                previous_commit_id, previous_date = None, None
                 while (repo_num, commit_id) in self.commit_parents:
                     _, commit_id = self.commit_parents[repo_num, commit_id]
                     if commit_id is not None:
-                        repo_branch_commits.append((self.commit_dates[repo_num, commit_id], repo_num, commit_id))
+                        committer_date = self.commit_dates[repo_num, commit_id]
+                        if previous_date and committer_date > previous_date:
+                            logging.warning("Commit %d:%d on branch %s at %s happened after parent %d:%d at %s",
+                                            repo_num, commit_id, branch, committer_date,
+                                            repo_num, previous_commit_id, previous_date)
+                        repo_branch_commits.append((committer_date, repo_num, commit_id))
+                        previous_commit_id, previous_date = commit_id, committer_date
             last_repo, last_commit_id = None, None
             while repo_branches:
                 last_commits = [commits[0] for _, commits in sorted(repo_branches.items())]
