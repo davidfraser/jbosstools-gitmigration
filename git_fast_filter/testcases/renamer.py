@@ -21,12 +21,12 @@ def main(args):
         branch = commit.branch
         if branch in branch_renames:
             if branch not in branches_found:
-                logging.info("Found branch %s (renaming to %s)", branch, branch_renames[branch])
+                logging.info("Renaming branch %s to %s", branch, branch_renames[branch])
                 branches_found.add(branch)
             commit.branch = branch_renames[branch]
         elif branch in branch_excludes:
             if branch not in branches_found:
-                logging.info("Found branch %s - excluding", branch)
+                logging.info("Excluding branch %s", branch)
                 branches_found.add(branch)
             commit.skip()
             return
@@ -46,14 +46,14 @@ def main(args):
                 exclude_file = True
             if exclude_file:
                 if filename not in files_found:
-                    logging.info("Found file %s - excluding", filename)
+                    logging.info("Excluding file %s", filename)
                     files_found.add(filename)
                 alter_commit = True
             else:
                 new_file_changes.append(change)
             if filename != change.filename:
                 if change.filename not in files_found:
-                    logging.info("Found file %s (renaming to %s)", change.filename, filename)
+                    logging.info("Renaming file %s to %s", change.filename, filename)
                     files_found.add(change.filename)
                 change.filename = filename
         if alter_commit:
