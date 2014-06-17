@@ -16,6 +16,7 @@ from git_fast_filter import _IDS
 from git_fast_filter import FixedTimeZone
 
 # TODO: allow incremental update
+# TODO: show out-of-order dates
 # TODO: make this a command-line option
 KEEP_ON_ERROR = True
 
@@ -230,8 +231,8 @@ class InterleaveRepositories:
     def write_commit(self, repo, commit):
         prev_repo, prev_commit_id = self.changed_parents.get((repo, commit.old_id), (None, None))
         if prev_commit_id is not None:
-            logging.info("relabeling %s:%s parent from %s:%s -> %s:%s",
-                         repo, commit.old_id, repo, commit.from_commit, prev_repo, prev_commit_id)
+            logging.debug("relabeling %s:%s parent from %s:%s -> %s:%s",
+                          repo, commit.old_id, repo, commit.from_commit, prev_repo, prev_commit_id)
             commit.from_commit = prev_commit_id
         commit.dump(self.target.stdin if hasattr(self.target, "stdin") else self.target)
         # logging.info("Writing commit %s:%s->%s", repo, commit.old_id, commit.id)
