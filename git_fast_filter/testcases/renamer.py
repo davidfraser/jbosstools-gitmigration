@@ -10,8 +10,11 @@ def parse_rename(rename_str):
 
 def main(args):
     branch_renames = dict(args.branch_renames)
+    branch_excludes = dict(args.branch_excludes)
     file_renames = dict([(src, target) for src, target in args.file_renames if not src.endswith("/")])
     dir_renames = [(src, target) for src, target in args.file_renames if src.endswith("/")]
+    file_excludes = set([target for target in args.file_excludes if not src.endswith("/")])
+    dir_excludes = [target for target in args.file_excludes if src.endswith("/")]
     branches_found = set()
     files_found = set()
     def my_commit_callback(commit):
@@ -21,18 +24,43 @@ def main(args):
                 logging.info("Found branch %s (renaming to %s)", branch, branch_renames[branch])
                 branches_found.add(branch)
             commit.branch = branch_renames[branch]
+        elif branch in branch_excludes:
+            if branch not in branches_found:
+                logging.info("Found branch %s - excluding", branch)
+                branches_found.add(branch)
+            commit.skip()
+            return
+        new_file_changes, alter_commit = [], False
         for change in commit.file_changes:
+            exclude_file = False
             filename = change.filename
             for src_dir, target_dir in dir_renames:
                 if filename.startswith(src_dir):
                     filename = filename.replace(src_dir, target_dir, 1)
+            for target_dir in dir_excludes:
+                if filename.startswith(target_dir):
+                    exclude_file = True
             if filename in file_renames:
                 filename = file_renames[filename]
+            if filename in file_excludes:
+                exclude_file = True
+            if exclude_file:
+                alter_commit = True
+            else:
+                if filename not in files_found:
+                    logging.info("Found file %s - excluding", filename)
+                    files_found.add(filename)
+                new_file_changes.append(change)
             if filename != change.filename:
                 if change.filename not in files_found:
                     logging.info("Found file %s (renaming to %s)", change.filename, filename)
                     files_found.add(change.filename)
                 change.filename = filename
+        if alter_commit:
+            if new_file_changes:
+                commit.file_changes = new_file_changes
+            else:
+                commit.skip()
     filter = FastExportFilter(commit_callback = my_commit_callback)
     filter.run()
 
@@ -44,5 +72,9 @@ if __name__ == '__main__':
                         help="src_branch=target_branch: renames branches (must match full branch e.g. refs/thebranch)")
     parser.add_argument("-f", "--file", action="append", default=[], dest="file_renames", type=parse_rename,
                         help="src=target: renames file (whole path); src/=target/: renames all files in directory")
+    parser.add_argument("-X", "--exclude-branch", action="append", default=[], dest="branch_excludes",
+                        help="excludes branches from filter (must match full branch e.g. refs/thebranch)")
+    parser.add_argument("-x", "--exclude", action="append", default=[], dest="file_excludes",
+                        help="target: excludes file (whole path); target/: excludes all files in directory")
     args = parser.parse_args()
     main(args)
