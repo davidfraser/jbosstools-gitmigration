@@ -2,6 +2,7 @@
 
 from git_fast_filter import Blob, Reset, FileChanges, Commit, FastExportFilter
 import logging
+import re
 
 def parse_rename(rename_str):
     if "=" not in rename_str:
