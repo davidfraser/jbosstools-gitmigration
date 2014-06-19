@@ -219,11 +219,11 @@ class InterleaveRepositories:
                          branch, len(self.commit_owners), sum(len(l) for l in self.commit_owners.values()))
             combined_commits.reverse()
         woven_branches = {
-            "combined_branches": {branch: ["%s:%s" for rc in commits] for branch, commits in self.combined_branches.items()},
-            "commit_parents": {"%s:%s" % k: "%s:%s" % v for k, v in self.commit_parents.items()},
-            "changed_parents": {"%s:%s" % k: "%s:%s" % v for k, v in self.changed_parents.items()},
-            "commit_owners": {"%s:%s" % k: sorted(v) for k, v in self.commit_owners.items()},
-            "commit_dates": {"%s:%s" % k: datetime_to_json(d) for k, d in self.commit_dates.items()}
+            "combined_branches": dict((branch, ["%s:%s" for rc in commits]) for branch, commits in self.combined_branches.items()),
+            "commit_parents": dict(("%s:%s" % k, "%s:%s" % v) for k, v in self.commit_parents.items()),
+            "changed_parents": dict(("%s:%s" % k, "%s:%s" % v) for k, v in self.changed_parents.items()),
+            "commit_owners": dict(("%s:%s" % k, sorted(v)) for k, v in self.commit_owners.items()),
+            "commit_dates": dict(("%s:%s" % k, datetime_to_json(d)) for k, d in self.commit_dates.items()),
         }
         woven_branches_file = self.open_export_file(self.output_name, ".remember-weave.json", "weave info", overwrite=True)
         json.dump(woven_branches, woven_branches_file.file, indent=4)
@@ -272,7 +272,7 @@ class InterleaveRepositories:
 
     def write_commits(self):
         while self.combined_branches or self.production_in_progress:
-            # print "combined_branches", {branch: combined_commits[0] for branch, combined_commits in self.combined_branches.items() if combined_commits}
+            # print "combined_branches", dict((branch, combined_commits[0]) for branch, combined_commits in self.combined_branches.items() if combined_commits)
             available_commits = self.get_available_commits()
             # print "available_commits", available_commits
             if available_commits:
@@ -294,7 +294,7 @@ class InterleaveRepositories:
     def create_woven_export(self):
         self.weave_store = self.open_export_file(basename(self.output_dir), "-weave.git-fast-export", "weaved export", overwrite=True)
         self.target = self.weave_store.file
-        self.production_in_progress = {repo_num: False for repo_num, store in enumerate(self.exported_stores, start=1)}
+        self.production_in_progress = dict((repo_num, False) for repo_num, store in enumerate(self.exported_stores, start=1))
         try:
             for repo_num, exported_store in enumerate(self.exported_stores, start=1):
                 exported_store.open_for_read()
