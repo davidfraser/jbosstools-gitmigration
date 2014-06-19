@@ -10,6 +10,7 @@ def parse_rename(rename_str):
 
 def main(args):
     branch_renames = dict(args.branch_renames)
+    branch_pattern_renames = args.branch_pattern_renames
     branch_excludes = dict(args.branch_excludes)
     file_renames = dict([(src, target) for src, target in args.file_renames if not src.endswith("/")])
     dir_renames = [(src, target) for src, target in args.file_renames if src.endswith("/")]
@@ -19,17 +20,21 @@ def main(args):
     files_found = set()
     def my_commit_callback(commit):
         branch = commit.branch
+        for src_pattern, target in branch_pattern_renames:
+            branch = re.sub(src_pattern, target, branch)
         if branch in branch_renames:
-            if branch not in branches_found:
-                logging.info("Renaming branch %s to %s", branch, branch_renames[branch])
-                branches_found.add(branch)
-            commit.branch = branch_renames[branch]
+            branch = branch_renames[branch]
         elif branch in branch_excludes:
             if branch not in branches_found:
                 logging.info("Excluding branch %s", branch)
                 branches_found.add(branch)
             commit.skip()
             return
+        if branch != commit.branch:
+            if commit.branch not in branches_found:
+                logging.info("Renaming branch %s to %s", commit.branch, branch)
+                branches_found.add(commit.branch)
+            commit.branch = branch
         new_file_changes, alter_commit = [], False
         for change in commit.file_changes:
             exclude_file = False
@@ -70,6 +75,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="git export filter for renaming files and branches")
     parser.add_argument("-b", "--branch", action="append", default=[], dest="branch_renames", type=parse_rename,
                         help="src_branch=target_branch: renames branches (must match full branch e.g. refs/thebranch)")
+    parser.add_argument("-B", "--branch-pattern", action="append", default=[], dest="branch_pattern_renames", type=parse_rename,
+                        help="src_pattern=target: renames branches (does regex-based pattern substitution)")
     parser.add_argument("-f", "--file", action="append", default=[], dest="file_renames", type=parse_rename,
                         help="src=target: renames file (whole path); src/=target/: renames all files in directory")
     parser.add_argument("-X", "--exclude-branch", action="append", default=[], dest="branch_excludes",
