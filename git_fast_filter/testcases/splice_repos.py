@@ -152,7 +152,11 @@ class InterleaveRepositories:
             else:
                 logging.info("Doing export on repository %s [%d]", repo_name, repo_num)
                 stored_commits = []
-                export = fast_export_output(input_repo)
+                export_mark_file = join(abspath(input_repo), ".git", "splice-export-marks")
+                export_mark_args = ["--all", "--export-marks=%s" % export_mark_file]
+                if exists(export_mark_file):
+                    export_mark_args.append("--import-marks=%s" % export_mark_file)
+                export = fast_export_output(input_repo, export_mark_args)
                 try:
                     collect = FastExportFilter(commit_callback=lambda c: stored_commits.append(self.jsonize_commit(c)))
                     collect.run(export.stdout, exported_store.file)
@@ -314,7 +318,9 @@ class InterleaveRepositories:
     def import_woven_export(self):
         logging.info("Importing woven result into %s", self.weave_store.filename)
         self.weave_store.open_for_read()
-        self.target = fast_import_input(self.output_dir, import_input=self.weave_store.file)
+        import_mark_file = join(abspath(self.output_dir), ".git", "splice-mark-import")
+        import_mark_args = ["--import-marks-if-exists=%s" % import_mark_file, "--export-marks=%s" % import_mark_file]
+        self.target = fast_import_input(self.output_dir, import_mark_args, import_input=self.weave_store.file)
         # Wait for git-fast-import to complete (only necessary since we passed
         # file objects to FastExportFilter.run; and even then the worst that
         # happens is git-fast-import completes after this python script does)
