@@ -63,10 +63,7 @@ def main(args):
                     files_found.add(change.filename)
                 change.filename = filename
         if alter_commit:
-            if new_file_changes:
-                commit.file_changes = new_file_changes
-            else:
-                commit.skip()
+            commit.file_changes = new_file_changes
     filter = FastExportFilter(commit_callback = my_commit_callback)
     filter.run()
 
