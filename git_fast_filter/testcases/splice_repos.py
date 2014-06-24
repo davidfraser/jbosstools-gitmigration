@@ -107,7 +107,7 @@ class InterleaveRepositories:
         self.combined_branches = {}
         # changed_parents maps (repo, commit_id) -> (new_parent_repo, new_parent_id)
         self.changed_parents = {}
-        # keeps track of which commit_ids have been written, so we don't write something before its dependencies
+        # keeps track of which (repo, commit_id)s have been written, so we don't write something before its dependencies
         self.written_commit_ids = set()
         # maps (repo, commit_id) -> commit_object for those commits that have yet to be written
         self.pending_commits = {}
@@ -275,7 +275,7 @@ class InterleaveRepositories:
             commit.from_commit = prev_commit_id
         commit.dump(self.target.stdin if hasattr(self.target, "stdin") else self.target)
         # logging.info("Writing commit %s:%s->%s", repo, commit.old_id, commit.id)
-        self.written_commit_ids.add(commit.old_id)
+        self.written_commit_ids.add((repo, commit.old_id))
 
     def get_available_commits(self):
         available_commits = []
@@ -286,11 +286,11 @@ class InterleaveRepositories:
                 continue
             repo, commit_id = combined_commits[0]
             if (repo, commit_id) in self.changed_parents:
-                depends_on = self.changed_parents[repo, commit_id][1]
+                depends_on = self.changed_parents[repo, commit_id]
             else:
-                depends_on = self.commit_parents[repo, commit_id][1]
-            if not depends_on or depends_on in self.written_commit_ids:
-                logging.debug("Found %d:%d to write which belongs to %s", repo, commit_id, ",".join(self.commit_owners[repo, commit_id]))
+                depends_on = self.commit_parents[repo, commit_id]
+            if not depends_on[1] or depends_on in self.written_commit_ids or depends_on in self.archive_commits:
+                logging.debug("Found %d:%d to write, which belongs to %s", repo, commit_id, ",".join(self.commit_owners[repo, commit_id]))
                 for owner_branch in sorted(self.commit_owners[repo, commit_id]):
                     owner_combined_commits = self.combined_branches[owner_branch]
                     owner_combined_commits.remove((repo, commit_id))
