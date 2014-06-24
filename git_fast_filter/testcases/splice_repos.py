@@ -118,6 +118,8 @@ class InterleaveRepositories:
         self.commit_owners = {}
         # tracks which (repo, commit_id) have been read from a previous splice
         self.archive_commits = set()
+        # tracks the _id_offset for each store so that we can re-read it consistently
+        self.export_id_offsets = {}
 
     def open_export_file(self, label, suffix, description, overwrite=False):
         file_wrapper = IntermediateFile(label, suffix, description,
@@ -204,6 +206,8 @@ class InterleaveRepositories:
                 raise
             # TODO: handle the fact that marks are getting messed up by the two repos on an incremental import
             self.remember_commits(repo_num, stored_commits)
+            logging.info("id_offset is %d", collect._id_offset)
+            self.export_id_offsets[repo_num] = collect._id_offset
 
     def weave_branches(self):
         """for each branch, calculate how combining repos should change parents of commits"""
