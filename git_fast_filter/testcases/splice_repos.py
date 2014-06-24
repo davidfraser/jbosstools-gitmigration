@@ -88,6 +88,7 @@ class InterleaveRepositories:
     def __init__(self, args):
         self.input_repos = args.repos
         self.output_dir = args.output_repo
+        self.woven_branches_filename = join(self.output_dir, ".git", "splice-weave.json")
         self.output_name = basename(self.output_dir)
         self.failure_base_dir = dirname(abspath(self.output_dir))
         self.tmpdir = abspath(args.tmpdir)
@@ -113,6 +114,8 @@ class InterleaveRepositories:
         self.commit_subjects = {}
         # maps (repo, commit_id) -> {set of branches}
         self.commit_owners = {}
+        # tracks which (repo, commit_id) have been read from a previous splice
+        self.archive_commits = set()
 
     def open_export_file(self, label, suffix, description, overwrite=False):
         file_wrapper = IntermediateFile(label, suffix, description,
@@ -128,44 +131,76 @@ class InterleaveRepositories:
         subject = ''.join(commit.message.strip().splitlines()[:1])
         return (commit.id, commit.branch, datetime_to_json(commit.committer_date), commit.from_commit, subject)
 
-    def remember_commits(self, repo, stored_commits):
+    def remember_previous_commits(self):
+        """remembers commits we've previously written from the import marks file"""
+        if exists(self.woven_branches_filename):
+            with open(self.woven_branches_filename, 'r') as f:
+                woven_branches = json.load(f)
+                self.restore_woven_branches(woven_branches)
+
+    def save_woven_branches(self):
+        return {
+            "combined_branches": dict((branch, ["%s:%s" %rc for rc in commits]) for branch, commits in self.combined_branches.items()),
+            "commit_parents": dict(("%s:%s" % k, "%s:%s" % v) for k, v in self.commit_parents.items()),
+            "changed_parents": dict(("%s:%s" % k, "%s:%s" % v) for k, v in self.changed_parents.items()),
+            "commit_owners": dict(("%s:%s" % k, sorted(v)) for k, v in self.commit_owners.items()),
+            "commit_dates": dict(("%s:%s" % k, datetime_to_json(d)) for k, d in self.commit_dates.items()),
+        }
+
+    def restore_woven_branches(self, woven_branches):
+        def _parse_rc_pair(rcs):
+            rc = rcs.split(":", 1)
+            r = int(rc[0]) if rc[0] != "None" else "None"
+            c = int(rc[1]) if rc[1] != "None" else "None"
+            return r, c
+        prp = _parse_rc_pair
+        self.combined_branches = dict((branch, [prp(rcs) for rcs in commits])
+                                      for branch, commits in woven_branches["combined_branches"].items())
+        self.commit_parents = dict((prp(k), prp(v)) for k, v in woven_branches["commit_parents"].items())
+        self.changed_parents = dict((prp(k), prp(v)) for k, v in woven_branches["changed_parents"].items())
+        self.commit_owners = dict((prp(k), set(v)) for k, v in woven_branches["commit_owners"].items())
+        self.commit_dates = dict((prp(k), json_to_datetime(d)) for k, d in woven_branches["commit_dates"].items())
+        self.archive_commits.update(self.commit_owners)
+
+    def remember_commits(self, repo, stored_commits, archive=False):
         for commit_id, commit_branch, committer_date_parts, from_commit, subject in stored_commits:
             committer_date = json_to_datetime(committer_date_parts)
             self.commit_branch_ends.setdefault(commit_branch, {})[repo] = commit_id
             self.commit_parents[repo, commit_id] = (repo, from_commit)
             self.commit_dates[repo, commit_id] = committer_date
             self.commit_subjects[repo, commit_id] = subject
-
+            if archive:
+                self.archive_commits.add((repo, commit_id))
 
     def collect_commits(self):
         self.exported_stores = []
         for repo_num, input_repo in enumerate(self.input_repos, start=1):
             repo_name = basename(input_repo)
-            remember_commits_file = self.open_export_file(repo_name, ".remember-commits.json", "commit info")
-            exported_store = self.open_export_file(repo_name, ".git-fast-export", "export",
-                                                   overwrite=not remember_commits_file.exists)
+            remember_commits_filename = os.path.join(abspath(input_repo), ".git", "splice-commits.json")
+            exported_store = self.open_export_file(repo_name, ".git-fast-export", "export", overwrite=True)
             self.exported_stores.append(exported_store)
-            if exported_store.exists:
-                logging.info("Reading remembered commits for repository %s [%d]", repo_name, repo_num)
-                stored_commits = json.load(remember_commits_file.file)
-                remember_commits_file.close()
-            else:
-                logging.info("Doing export on repository %s [%d]", repo_name, repo_num)
-                stored_commits = []
-                export_mark_file = join(abspath(input_repo), ".git", "splice-export-marks")
-                export_mark_args = ["--all", "--export-marks=%s" % export_mark_file]
-                if exists(export_mark_file):
-                    export_mark_args.append("--import-marks=%s" % export_mark_file)
-                export = fast_export_output(input_repo, export_mark_args)
-                try:
-                    collect = FastExportFilter(commit_callback=lambda c: stored_commits.append(self.jsonize_commit(c)))
-                    collect.run(export.stdout, exported_store.file)
-                    exported_store.close()
-                    json.dump(stored_commits, remember_commits_file.file, indent=4)
-                    remember_commits_file.close()
-                except Exception, e:
-                    logging.error("Error in memorizing export for %s [%d]: %s", input_repo, repo_num, e)
-                    raise
+            logging.info("Doing export on repository %s [%d]", repo_name, repo_num)
+            stored_commits = []
+            export_mark_file = join(abspath(input_repo), ".git", "splice-export-marks")
+            export_mark_args = ["--all", "--export-marks=%s" % export_mark_file]
+            if exists(export_mark_file):
+                export_mark_args.append("--import-marks=%s" % export_mark_file)
+            export = fast_export_output(input_repo, export_mark_args)
+            logging.info("_next_id is %d", _IDS._next_id)
+            try:
+                collect = FastExportFilter(commit_callback=lambda c: stored_commits.append(self.jsonize_commit(c)))
+                logging.info("offset for repo %d is %d", repo_num, collect._id_offset)
+                kwargs = {}
+                if repo_num == 2:
+                    kwargs["id_offset"] = 8
+                collect.run(export.stdout, exported_store.file, **kwargs)
+                exported_store.close()
+                with open(remember_commits_filename, 'wb') as remember_commits_file:
+                    json.dump(stored_commits, remember_commits_file, indent=4)
+            except Exception, e:
+                logging.error("Error in memorizing export for %s [%d]: %s", input_repo, repo_num, e)
+                raise
+            # TODO: handle the fact that marks are getting messed up by the two repos on an incremental import
             self.remember_commits(repo_num, stored_commits)
 
     def weave_branches(self):
@@ -222,16 +257,9 @@ class InterleaveRepositories:
             logging.info("After processing %s, commit_owners has %d unique entries and %d entries",
                          branch, len(self.commit_owners), sum(len(l) for l in self.commit_owners.values()))
             combined_commits.reverse()
-        woven_branches = {
-            "combined_branches": dict((branch, ["%s:%s" for rc in commits]) for branch, commits in self.combined_branches.items()),
-            "commit_parents": dict(("%s:%s" % k, "%s:%s" % v) for k, v in self.commit_parents.items()),
-            "changed_parents": dict(("%s:%s" % k, "%s:%s" % v) for k, v in self.changed_parents.items()),
-            "commit_owners": dict(("%s:%s" % k, sorted(v)) for k, v in self.commit_owners.items()),
-            "commit_dates": dict(("%s:%s" % k, datetime_to_json(d)) for k, d in self.commit_dates.items()),
-        }
-        woven_branches_file = self.open_export_file(self.output_name, ".remember-weave.json", "weave info", overwrite=True)
-        json.dump(woven_branches, woven_branches_file.file, indent=4)
-        woven_branches_file.close()
+        woven_branches = self.save_woven_branches()
+        with open(self.woven_branches_filename, 'wb') as woven_branches_file:
+            json.dump(woven_branches, woven_branches_file, indent=4)
 
     def weave_commit(self, repo, commit):
         # print "weave", repo, commit.id, commit.old_id, commit.message
@@ -330,7 +358,12 @@ class InterleaveRepositories:
     def run(self):
         success = False
         try:
+            self.remember_previous_commits()
             self.collect_commits()
+            if not os.path.isdir(self.output_dir):
+                os.makedirs(self.output_dir)
+                if subprocess.call(["git", "init", "--shared"], cwd=self.output_dir) != 0:
+                    raise SystemExit("git init in %s failed!" % self.output_dir)
             self.weave_branches()
 
             # Reset the _next_id so that it's like we're starting afresh
