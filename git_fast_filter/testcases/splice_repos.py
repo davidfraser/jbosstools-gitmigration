@@ -88,6 +88,7 @@ class InterleaveRepositories:
     def __init__(self, args):
         self.input_repos = args.repos
         self.output_dir = args.output_repo
+        self.import_mark_file = join(abspath(self.output_dir), ".git", "splice-mark-import")
         self.woven_branches_filename = join(self.output_dir, ".git", "splice-weave.json")
         self.output_name = basename(self.output_dir)
         self.failure_base_dir = dirname(abspath(self.output_dir))
@@ -346,8 +347,7 @@ class InterleaveRepositories:
     def import_woven_export(self):
         logging.info("Importing woven result into %s", self.weave_store.filename)
         self.weave_store.open_for_read()
-        import_mark_file = join(abspath(self.output_dir), ".git", "splice-mark-import")
-        import_mark_args = ["--import-marks-if-exists=%s" % import_mark_file, "--export-marks=%s" % import_mark_file]
+        import_mark_args = ["--import-marks-if-exists=%s" % self.import_mark_file, "--export-marks=%s" % self.import_mark_file]
         self.target = fast_import_input(self.output_dir, import_mark_args, import_input=self.weave_store.file)
         # Wait for git-fast-import to complete (only necessary since we passed
         # file objects to FastExportFilter.run; and even then the worst that
