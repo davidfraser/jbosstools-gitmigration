@@ -240,11 +240,11 @@ class InterleaveRepositories:
                                 last = (last_repo, last_commit_id)
                                 assigned = (assigned_repo, assigned_commit_id)
                                 logging.info("%d:%d on %s at %s with subject %s", last_repo, last_commit_id,
-                                             branch, self.commit_dates[last], self.commit_subjects[last])
+                                             branch, self.commit_dates[last], self.commit_subjects.get(last, "unknown"))
                                 logging.info("%d:%d on %s at %s with subject %s", assigned_repo, assigned_commit_id,
-                                             branch, self.commit_dates[assigned], self.commit_subjects[assigned])
+                                             branch, self.commit_dates[assigned], self.commit_subjects.get(assigned, "unknown"))
                                 logging.info("%d:%d on %s at %s with subject %s", repo_num, commit_id,
-                                             branch, committer_date, self.commit_subjects[repo_num, commit_id])
+                                             branch, committer_date, self.commit_subjects.get((repo_num, commit_id), "unknown"))
                                 logging.error("%d:%d on branch %s already maps to %d:%d but must also map to %d:%d",
                                             last_repo, last_commit_id, branch, assigned_repo, assigned_commit_id,
                                             repo_num, commit_id)
