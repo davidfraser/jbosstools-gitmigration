@@ -121,6 +121,8 @@ class InterleaveRepositories:
         self.archive_commits = set()
         # tracks the _id_offset for each store so that we can re-read it consistently
         self.export_id_offsets = {}
+        # maps commit_id -> export_mark for the merge
+        self.merge_map = {}
 
     def open_export_file(self, label, suffix, description, overwrite=False):
         file_wrapper = IntermediateFile(label, suffix, description,
@@ -150,6 +152,7 @@ class InterleaveRepositories:
             "changed_parents": dict(("%s:%s" % k, "%s:%s" % v) for k, v in self.changed_parents.items()),
             "commit_owners": dict(("%s:%s" % k, sorted(v)) for k, v in self.commit_owners.items()),
             "commit_dates": dict(("%s:%s" % k, datetime_to_json(d)) for k, d in self.commit_dates.items()),
+            "merge_map": self.merge_map,
         }
 
     def restore_woven_branches(self, woven_branches):
@@ -166,6 +169,7 @@ class InterleaveRepositories:
         self.commit_owners = dict((prp(k), set(v)) for k, v in woven_branches["commit_owners"].items())
         self.commit_dates = dict((prp(k), json_to_datetime(d)) for k, d in woven_branches["commit_dates"].items())
         self.archive_commits.update(self.commit_owners)
+        self.merge_map = dict((int(k), v) for k, v in woven_branches["merge_map"].items())
 
     def remember_commits(self, repo, stored_commits, archive=False):
         for commit_id, commit_branch, committer_date_parts, from_commit, subject in stored_commits:
@@ -276,13 +280,19 @@ class InterleaveRepositories:
     def write_commit(self, repo, commit):
         prev_repo, prev_commit_id = self.changed_parents.get((repo, commit.old_id), (None, None))
         if prev_commit_id is not None:
-            logging.info("relabeling %s:%s parent from %s:%s -> %s:%s",
-                          repo, commit.old_id, repo, commit.from_commit, prev_repo, prev_commit_id)
-            commit.from_commit = _IDS._translation.get(prev_commit_id, prev_commit_id)
+            merge_commit_id = self.merge_map.get(prev_commit_id, prev_commit_id)
+            logging.info("relabeling %s:%s parent from %s:%s -> %s:%s/%s",
+                          repo, commit.old_id, repo, commit.from_commit, prev_repo, prev_commit_id, merge_commit_id)
+            commit.from_commit = merge_commit_id
+        else:
+            merge_commit_id = self.merge_map.get(commit.from_commit, commit.from_commit)
+            logging.info("relabeling %s:%s parent %s:%s/%s",
+                         repo, commit.old_id, repo, commit.from_commit, merge_commit_id)
+            commit.from_commit = merge_commit_id
         logging.info("Writing commit %d:%d/%d", repo, commit.old_id, commit.id)
         commit.dump(self.target.stdin if hasattr(self.target, "stdin") else self.target)
-        # logging.info("Writing commit %s:%s->%s", repo, commit.old_id, commit.id)
         self.written_commit_ids.add((repo, commit.old_id))
+        self.merge_map[commit.old_id] = commit.id
 
     def get_available_commits(self):
         available_commits = []
@@ -358,6 +368,9 @@ class InterleaveRepositories:
         except Exception, e:
             logging.error("Error weaving commits into new repository: %s", e)
             raise
+        woven_branches = self.save_woven_branches()
+        with open(self.woven_branches_filename, 'wb') as woven_branches_file:
+            json.dump(woven_branches, woven_branches_file, indent=4)
 
     def import_woven_export(self):
         logging.info("Importing woven result into %s", self.weave_store.filename)
@@ -403,7 +416,6 @@ class InterleaveRepositories:
                     raise SystemExit("git init in %s failed!" % self.output_dir)
 
             self.weave_branches()
-            self.reset_next_ids()
             self.reset_next_ids(include_import_marks=True)
             self.create_woven_export()
             self.import_woven_export()
