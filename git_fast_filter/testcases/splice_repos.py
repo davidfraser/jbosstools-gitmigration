@@ -370,9 +370,20 @@ class InterleaveRepositories:
         self.target.wait()
         self.weave_store.close()
 
-    def reset_next_ids(self):
+    def reset_next_ids(self, include_import_marks=False):
         # Reset the _next_id so that it's like we're starting afresh
         new_next_id = max(c for r, c in (self.commit_owners or [(0, 0)])) + 1
+        if include_import_marks:
+            if exists(self.import_mark_file):
+                import_marks = set()
+                with open(self.import_mark_file, 'r') as f:
+                    for line in f.readlines():
+                        if line.strip():
+                            mark = int(line.split()[0][1:])
+                            import_marks.add(mark)
+                max_import_mark = max(import_marks) if import_marks else 0
+                logging.info("Maximum import mark is %d from %d marks", max_import_mark, len(import_marks))
+                new_next_id = max(max_import_mark+1, new_next_id)
         logging.info("Resetting next_id from %d -> %d", _IDS._next_id, new_next_id)
         _IDS._next_id = new_next_id
         _IDS._translation.clear()
@@ -393,6 +404,7 @@ class InterleaveRepositories:
 
             self.weave_branches()
             self.reset_next_ids()
+            self.reset_next_ids(include_import_marks=True)
             self.create_woven_export()
             self.import_woven_export()
             success = True
