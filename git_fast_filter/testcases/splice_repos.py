@@ -222,7 +222,7 @@ class InterleaveRepositories:
                 previous_commit_id, previous_date = None, None
                 while (repo_num, commit_id) in self.commit_parents:
                     _, commit_id = self.commit_parents[repo_num, commit_id]
-                    if commit_id is not None:
+                    if commit_id is not None and (repo_num, commit_id) in self.commit_parents:
                         committer_date = self.commit_dates[repo_num, commit_id]
                         if previous_date and committer_date > previous_date:
                             logging.warning("Commit %d:%d on branch %s at %s happened after parent %d:%d at %s",
