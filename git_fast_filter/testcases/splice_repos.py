@@ -276,9 +276,10 @@ class InterleaveRepositories:
     def write_commit(self, repo, commit):
         prev_repo, prev_commit_id = self.changed_parents.get((repo, commit.old_id), (None, None))
         if prev_commit_id is not None:
-            logging.debug("relabeling %s:%s parent from %s:%s -> %s:%s",
+            logging.info("relabeling %s:%s parent from %s:%s -> %s:%s",
                           repo, commit.old_id, repo, commit.from_commit, prev_repo, prev_commit_id)
-            commit.from_commit = prev_commit_id
+            commit.from_commit = _IDS._translation.get(prev_commit_id, prev_commit_id)
+        logging.info("Writing commit %d:%d/%d", repo, commit.old_id, commit.id)
         commit.dump(self.target.stdin if hasattr(self.target, "stdin") else self.target)
         # logging.info("Writing commit %s:%s->%s", repo, commit.old_id, commit.id)
         self.written_commit_ids.add((repo, commit.old_id))
