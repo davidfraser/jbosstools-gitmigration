@@ -384,15 +384,15 @@ class InterleaveRepositories:
         success = False
         try:
             self.remember_previous_commits()
+            self.reset_next_ids()
             self.collect_commits()
             if not os.path.isdir(self.output_dir):
                 os.makedirs(self.output_dir)
                 if subprocess.call(["git", "init", "--shared"], cwd=self.output_dir) != 0:
                     raise SystemExit("git init in %s failed!" % self.output_dir)
-            self.weave_branches()
 
-            # Reset the _next_id so that it's like we're starting afresh
-            _IDS._next_id = 1
+            self.weave_branches()
+            self.reset_next_ids()
             self.create_woven_export()
             self.import_woven_export()
             success = True
