@@ -11,9 +11,10 @@ import logging
 import tempfile
 from os.path import abspath, basename, dirname, exists, join
 
+import git_fast_filter
 from git_fast_filter import Reset, Commit, FastExportFilter, record_id_rename
 from git_fast_filter import fast_export_output, fast_import_input
-from git_fast_filter import _IDS
+from git_fast_filter import _IDS, _EXTRA_CHANGES
 from git_fast_filter import FixedTimeZone
 
 # TODO: allow incremental update
@@ -367,6 +368,16 @@ class InterleaveRepositories:
         # happens is git-fast-import completes after this python script does)
         self.target.wait()
         self.weave_store.close()
+
+    def reset_next_ids(self):
+        # Reset the _next_id so that it's like we're starting afresh
+        new_next_id = max(c for r, c in (self.commit_owners or [(0, 0)])) + 1
+        logging.info("Resetting next_id from %d -> %d", _IDS._next_id, new_next_id)
+        _IDS._next_id = new_next_id
+        _IDS._translation.clear()
+        _IDS._reverse_translation.clear()
+        _EXTRA_CHANGES.clear()
+        git_fast_filter._CURRENT_STREAM_NUMBER = 0
 
     def run(self):
         success = False
