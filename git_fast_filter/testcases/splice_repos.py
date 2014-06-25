@@ -218,14 +218,19 @@ class InterleaveRepositories:
         """for each branch, calculate how combining repos should change parents of commits"""
         logging.info("Weaving %d branches from %d repositories", len(self.commit_branch_ends), len(self.input_repos))
         for branch, repo_heads in self.commit_branch_ends.items():
-            self.combined_branches[branch] = combined_commits = []
+            existing_commits = self.combined_branches.get(branch, [])
+            combined_commits = []
             repo_branches = {}
             for repo_num, commit_id in sorted(repo_heads.items()):
                 committer_date = self.commit_dates[repo_num, commit_id]
                 repo_branches[repo_num] = repo_branch_commits = [(committer_date, repo_num, commit_id)]
                 previous_commit_id, previous_date = None, None
                 while (repo_num, commit_id) in self.commit_parents:
-                    _, commit_id = self.commit_parents[repo_num, commit_id]
+                    repo_num, commit_id = self.commit_parents[repo_num, commit_id]
+                    if (repo_num, commit_id) in existing_commits:
+                        logging.info("Found point at which branch %s links to existing commits: %s:%s",
+                                     branch, repo_num, commit_id)
+                        break
                     if commit_id is not None and (repo_num, commit_id) in self.commit_parents:
                         committer_date = self.commit_dates[repo_num, commit_id]
                         if previous_date and committer_date > previous_date:
@@ -265,9 +270,18 @@ class InterleaveRepositories:
                 last_repo, last_commit_id = repo_num, commit_id
                 if not commits:
                     repo_branches.pop(repo_num)
+            if existing_commits:
+                last_existing_repo, last_existing_commit_id = existing_commits[-1]
+                if (last_repo, last_commit_id) != (None, None):
+                    parent_repo_num, parent_commit_id = self.commit_parents.get((last_repo, last_commit_id), (None, None))
+                    if (parent_repo_num, parent_commit_id) != (last_existing_repo, last_existing_commit_id):
+                        logging.info("Stitching branch %s: %d:%d -> last existing commit %d:%d",
+                                     branch, last_repo, last_commit_id, last_existing_repo, last_existing_commit_id)
+                        self.changed_parents[last_repo, last_commit_id] = last_existing_repo, last_existing_commit_id
             logging.info("After processing %s, commit_owners has %d unique entries and %d entries",
                          branch, len(self.commit_owners), sum(len(l) for l in self.commit_owners.values()))
             combined_commits.reverse()
+            self.combined_branches[branch] = existing_commits + combined_commits
         woven_branches = self.save_woven_branches()
         with open(self.woven_branches_filename, 'wb') as woven_branches_file:
             json.dump(woven_branches, woven_branches_file, indent=4)
