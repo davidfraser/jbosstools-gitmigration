@@ -300,14 +300,17 @@ class InterleaveRepositories:
             # for each branch, look to see if the next commit we need is available
             while combined_commits and combined_commits[0] in self.archive_commits:
                 repo, commit_id = combined_commits[0]
-                logging.info("Skipping previously spliced commit %d:%d", repo, commit_id)
+                # logging.info("Skipping previously spliced commit %d:%d", repo, commit_id)
                 for owner_branch in sorted(self.commit_owners[repo, commit_id]):
+                    if owner_branch not in self.combined_branches:
+                        continue
                     owner_combined_commits = self.combined_branches[owner_branch]
-                    owner_combined_commits.remove((repo, commit_id))
+                    if (repo, commit_id) in owner_combined_commits:
+                        owner_combined_commits.remove((repo, commit_id))
                     if not owner_combined_commits:
                         self.combined_branches.pop(owner_branch)
             if not combined_commits:
-                self.combined_branches.pop(branch)
+                self.combined_branches.pop(branch, None)
                 continue
             repo, commit_id = combined_commits[0]
             if (repo, commit_id) in self.changed_parents:
