@@ -105,7 +105,7 @@ class InterleaveRepositories:
         self.commit_dates = {}
         # commit_parents maps (repo, commit_id) -> (repo, parent_id)
         self.commit_parents = {}
-        # combined_branches maps branch -> ordered list of (repo, commit_id)
+        # combined_branches maps branch -> ordered list of (repo, commit_id). Consumed during weave
         self.combined_branches = {}
         # changed_parents maps (repo, commit_id) -> (new_parent_repo, new_parent_id)
         self.changed_parents = {}
@@ -371,7 +371,10 @@ class InterleaveRepositories:
         except Exception, e:
             logging.error("Error weaving commits into new repository: %s", e)
             raise
+        with open(self.woven_branches_filename, 'rb') as woven_branches_file:
+            last_woven_branches = json.load(woven_branches_file)
         woven_branches = self.save_woven_branches()
+        woven_branches["combined_branches"] = last_woven_branches["combined_branches"]
         with open(self.woven_branches_filename, 'wb') as woven_branches_file:
             json.dump(woven_branches, woven_branches_file, indent=4)
 
