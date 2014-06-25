@@ -219,6 +219,7 @@ class InterleaveRepositories:
         logging.info("Weaving %d branches from %d repositories", len(self.commit_branch_ends), len(self.input_repos))
         for branch, repo_heads in self.commit_branch_ends.items():
             existing_commits = self.combined_branches.get(branch, [])
+            existing_commit_set = set(existing_commits)
             combined_commits = []
             repo_branches = {}
             for repo_num, commit_id in sorted(repo_heads.items()):
@@ -227,7 +228,7 @@ class InterleaveRepositories:
                 previous_commit_id, previous_date = None, None
                 while (repo_num, commit_id) in self.commit_parents:
                     repo_num, commit_id = self.commit_parents[repo_num, commit_id]
-                    if (repo_num, commit_id) in existing_commits:
+                    if (repo_num, commit_id) in existing_commit_set:
                         logging.info("Found point at which branch %s links to existing commits: %s:%s",
                                      branch, repo_num, commit_id)
                         break
