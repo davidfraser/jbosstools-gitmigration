@@ -197,7 +197,8 @@ class InterleaveRepositories:
             export = fast_export_output(input_repo, export_mark_args)
             logging.info("_next_id is %d", _IDS._next_id)
             try:
-                collect = FastExportFilter(commit_callback=lambda c: stored_commits.append(self.jsonize_commit(c)))
+                collect = FastExportFilter(reset_callback=lambda r: self.skip_reset(r),
+                                           commit_callback=lambda c: stored_commits.append(self.jsonize_commit(c)))
                 logging.info("offset for repo %d is %d", repo_num, collect._id_offset)
                 kwargs = {}
                 if repo_num == 2:
