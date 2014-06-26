@@ -357,7 +357,7 @@ class InterleaveRepositories:
                     # print("writing on branch %s repo %s commit_id %s/%s" % (branch, repo, commit_id, commit.id))
                     self.write_commit(repo, commit)
                     # print "production_in_progress", self.production_in_progress
-            else:
+            elif self.combined_branches or self.production_in_progress:
                 # this means the algorithm has got stuck and can't resolve the situation
                 raise ValueError("No available commits")
 
