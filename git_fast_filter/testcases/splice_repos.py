@@ -17,7 +17,6 @@ from git_fast_filter import fast_export_output, fast_import_input
 from git_fast_filter import _IDS, _EXTRA_CHANGES
 from git_fast_filter import FixedTimeZone
 
-# TODO: allow incremental update
 # TODO: make this a command-line option
 KEEP_ON_ERROR = True
 
@@ -210,7 +209,6 @@ class InterleaveRepositories:
             except Exception, e:
                 logging.error("Error in memorizing export for %s [%d]: %s", input_repo, repo_num, e)
                 raise
-            # TODO: handle the fact that marks are getting messed up by the two repos on an incremental import
             self.remember_commits(repo_num, stored_commits)
             logging.info("id_offset is %d", collect._id_offset)
             self.export_id_offsets[repo_num] = collect._id_offset
