@@ -410,6 +410,7 @@ class InterleaveRepositories:
     def reset_next_ids(self, include_import_marks=False):
         # Reset the _next_id so that it's like we're starting afresh
         new_next_id = max(c for r, c in (self.commit_owners or [(0, 0)])) + 1
+        # TODO: try using merge_maps rather than import marks here
         if include_import_marks:
             if exists(self.import_mark_file):
                 import_marks = set()
@@ -431,6 +432,11 @@ class InterleaveRepositories:
     def run(self):
         success = False
         try:
+            # what we need is a persistent map from:
+            # (original repo commit hash -> native export mark)
+            # native export mark -> merged export mark
+            # on a subsequent export, we need to reload the previous map
+            # then, adjust the from labels to the previously exported marks
             self.remember_previous_commits()
             self.reset_next_ids()
             self.collect_commits()
