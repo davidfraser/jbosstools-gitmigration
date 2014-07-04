@@ -215,6 +215,9 @@ class InterleaveRepositories:
 
     def weave_branches(self):
         """for each branch, calculate how combining repos should change parents of commits"""
+        if not self.commit_branch_ends:
+            logging.info("Found no branches to weave in %d repositories (normal on null incremental splice)", len(self.input_repos))
+            return False
         logging.info("Weaving %d branches from %d repositories", len(self.commit_branch_ends), len(self.input_repos))
         for branch, repo_heads in self.commit_branch_ends.items():
             existing_commits = self.combined_branches.get(branch, [])
@@ -285,6 +288,7 @@ class InterleaveRepositories:
         woven_branches = self.save_woven_branches()
         with open(self.woven_branches_filename, 'wb') as woven_branches_file:
             json.dump(woven_branches, woven_branches_file, indent=4)
+        return True
 
     def weave_commit(self, repo, commit):
         # print "weave", repo, commit.id, commit.old_id, commit.message
@@ -435,10 +439,10 @@ class InterleaveRepositories:
                 if subprocess.call(["git", "init", "--shared"], cwd=self.output_dir) != 0:
                     raise SystemExit("git init in %s failed!" % self.output_dir)
 
-            self.weave_branches()
-            self.reset_next_ids(include_import_marks=True)
-            self.create_woven_export()
-            self.import_woven_export()
+            if self.weave_branches():
+                self.reset_next_ids(include_import_marks=True)
+                self.create_woven_export()
+                self.import_woven_export()
             success = True
         finally:
             if success:
