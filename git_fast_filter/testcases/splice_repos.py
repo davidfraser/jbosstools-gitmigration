@@ -18,7 +18,7 @@ from git_fast_filter import _IDS, _EXTRA_CHANGES
 from git_fast_filter import FixedTimeZone
 
 # TODO: make this a command-line option
-KEEP_ON_ERROR = True
+DISCARD_ON_FAILURE = False
 
 def datetime_to_json(d):
     z = None if (d.tzinfo is None) else d.tzinfo.tzname(d)
@@ -66,7 +66,7 @@ class IntermediateFile(object):
         status = "in-progress " if self.in_progress else ""
         if not self.closed:
             self.close(False)
-        if not KEEP_ON_ERROR:
+        if DISCARD_ON_FAILURE:
             try:
                 os.remove(self.filename)
             except Exception, e:
