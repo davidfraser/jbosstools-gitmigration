@@ -1,3 +1,15 @@
+Git Splicing Tool
+---------
+
+This project is a set of extensions to the JBoss Tools for SVN to Git migration described below.
+These are primarily a tool to combine git repositories with corresponding branches together, with commits spliced in time order, (and with support for incremental imports, but not merges) and also a tool to filter git repositories
+
+*We have no intention to maintain or improve this tool.*
+
+The git-splice tool (under `git_fast_filter/test_cases/splice_repos.py`) worked effectively for us during the period we were preparing to migrate from two different svn repositories to a single git repository, but has a few bugs - it sometimes mismatches marks and breaks the incremental import. We managed to survive until we'd completed the migration but I'd recommend testing before using this.
+
+The git filter tool (under `git_fast_filter/test_cases/renamer.py`) allows renaming and excluding files and branches, which can help with the splicing process, or may be useful independently. It is fairly well tested and I'm not aware of any known bugs
+
 Scripts for doing JBoss Tools SVN to Git migration.
 ---------
 
